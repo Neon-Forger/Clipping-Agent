@@ -220,7 +220,11 @@ class Agent:
         n = n or self.state.get("clip_counts", {}).get(v["id"]) or src.get("clips_per_video", 5)
         edit = self.settings["edit"]
         self.set_task(f"AI picking moments: {v['title'][:35]}")
-        picks = ai.select_moments(self.settings["ai"], edit, src, v, transcribe.transcript_for_ai(tr), n)
+        done = [f"{int(c['start'] // 60)}:{int(c['start'] % 60):02d}-{int(c['end'] // 60)}:{int(c['end'] % 60):02d}"
+                for c in self.db.q("SELECT start, end FROM clips WHERE video_id=?", (v["id"],))]
+        picks = ai.select_moments(self.settings["ai"], edit, src, v, transcribe.transcript_for_ai(tr), n, avoid=done)
+        prev = [(c["start"], c["end"]) for c in self.db.q("SELECT start, end FROM clips WHERE video_id=?", (v["id"],))]
+        picks = [c for c in picks if all(c["end"] <= a or c["start"] >= b for a, b in prev)]
         # drop overlaps
         chosen = []
         for c in picks:
@@ -460,7 +464,8 @@ class Agent:
         try:
             info = sources.video_info(url)
             src = self.settings["sources"][0] if self.settings["sources"] else {"name": "manual"}
-            self.db.add_video(info["id"], src.get("name", "manual"), info.get("webpage_url") or url, info.get("title", ""), info.get("duration"))
+            if not self.db.add_video(info["id"], src.get("name", "manual"), info.get("webpage_url") or url, info.get("title", ""), info.get("duration")):
+                self.db.update_video(info["id"], status="new", error=None)  # clip it again (skips moments already used)
             if n:
                 self.state.setdefault("clip_counts", {})[info["id"]] = n
             self.wake.set()

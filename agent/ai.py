@@ -81,7 +81,7 @@ Rules for every clip:
 - Prefer funny, surprising, relatable or controversial-but-safe moments that make people comment and share.
 - Skip ad reads/sponsor segments, intros/outros, and anything about death, violence, tragedy or real politics unless it's clearly comedic.
 - Clips must not overlap.
-{source_notes}{custom}
+{source_notes}{custom}{avoid}
 
 For each clip return:
 - "start" and "end": seconds from the start of the video (numbers, use the transcript timestamps).
@@ -100,7 +100,7 @@ TRANSCRIPT:
 """
 
 
-def select_moments(cfg_ai, cfg_edit, source, video, transcript_text, n, log=None):
+def select_moments(cfg_ai, cfg_edit, source, video, transcript_text, n, log=None, avoid=None):
     minutes = int((video.get("duration") or 0) // 60)
     notes = source.get("notes_for_ai") or ""
     prompt = SELECT_PROMPT.format(
@@ -108,6 +108,7 @@ def select_moments(cfg_ai, cfg_edit, source, video, transcript_text, n, log=None
         min_s=cfg_edit.get("min_seconds", 30), max_s=cfg_edit.get("max_seconds", 60),
         source_notes=f"- About this show: {notes}\n" if notes else "",
         custom=f"- Extra instructions from the owner: {cfg_ai.get('custom_instructions')}\n" if cfg_ai.get("custom_instructions") else "",
+        avoid=("- Already clipped, do NOT pick these again: " + ", ".join(avoid) + "\n") if avoid else "",
         transcript=transcript_text)
     raw = ask(cfg_ai, prompt, json_mode=True)
     data = parse_json(raw)

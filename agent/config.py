@@ -30,9 +30,9 @@ DEFAULTS = {
             "enabled": True,
             # A YouTube channel/playlist to watch for NEW videos, and/or fixed video links.
             "channel_url": "https://www.youtube.com/@YMHStudios/videos",
-            "video_urls": ["https://youtu.be/3pDAyRLPO58"],
+            "video_urls": [],
             "title_must_contain": "2 Bears, 1 Cave",
-            "only_newer_than_days": 10,
+            "only_newer_than_days": 4,
             # The Content Rewards campaign the clips are submitted to.
             "campaign_url": "https://contentrewards.com/c/campaigns/295e9879-4464-4a31-975d-1c7b3a80d359",
             "required_hashtags": ["#2BearsWeekly"],
