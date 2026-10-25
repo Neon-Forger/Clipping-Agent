@@ -91,7 +91,7 @@ def build_original(s, segments, portrait, work, out_path, log=None):
     used = set()
     parts, all_words, t0, chapters = [], [], 0.0, []
     stock = os.path.join(os.path.dirname(work), "_stock")
-    from .stickman import PhotoSource
+    from .photos import PhotoSource, pixabay_video
     photos = PhotoSource(s, os.path.join(os.path.dirname(work), "_photos"), None)
     warned = False
     for i, seg in enumerate(segments):
@@ -101,7 +101,9 @@ def build_original(s, segments, portrait, work, out_path, log=None):
         words = tts.speak(seg["text"], s["voice"], s.get("voice_rate", "+0%"), mp3)
         dur = max(media_duration(mp3), 0.5) + 0.15
         clip = os.path.join(work, f"c{i:02d}.mp4")
-        src = visuals.pexels_video(seg.get("visual") or s["genre"], s.get("pexels_api_key"), portrait, stock, used)
+        q = seg.get("visual") or s["genre"]
+        src = visuals.pexels_video(q, s.get("pexels_api_key"), portrait, stock, used) \
+            or pixabay_video(q, s.get("pixabay_api_key"), portrait, stock, used)
         if src:
             _fit_clip(src, dur, clip, portrait)
         else:
@@ -119,7 +121,7 @@ def build_original(s, segments, portrait, work, out_path, log=None):
                 if log and not warned:
                     warned = True
                     log("warn", "No footage or photo found for some parts, so they use the neon background. "
-                                "Add a free Pexels key in YouTube → SETTINGS for real stock footage.")
+                                + photos.status_text() + " A free Pixabay key (YouTube → SETTINGS) adds stock video and photos.")
                 loop = os.path.join(stock, f"neon_loop_{'p' if portrait else 'l'}.mp4")
                 if not os.path.exists(loop):
                     os.makedirs(stock, exist_ok=True)

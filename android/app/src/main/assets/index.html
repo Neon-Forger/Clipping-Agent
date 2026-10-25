@@ -171,6 +171,16 @@
       <button onclick="if(confirm('Upload the next finished video now?')) cmd('yt upload')">Upload next now</button>
       <button onclick="cmd('yt list')">Video list</button>
     </div>
+    <div class="card" style="margin-top:12px">
+      <div class="task">🧠 TRAINING MODE</div>
+      <div class="muted" id="y_train">–</div><br>
+      <div class="grid2">
+        <button class="acc" id="y_trainBtn" onclick="cmd(yState && yState.training ? 'yt train off' : 'yt train on')">TURN ON</button>
+        <button onclick="cmd('yt learn')">Learn now</button>
+        <button onclick="cmd('yt stats')">Best videos</button>
+        <button onclick="cmd('yt train')">Training status</button>
+      </div>
+    </div>
     <h3>LATEST</h3><div id="y_latest"></div>
   </section>
   <section id="y_feed" class="hide"><div id="y_feedList"></div></section>
@@ -316,6 +326,8 @@ function renderState() {
     $("y_ready").textContent = yState.ready ?? "–"; $("y_planned").textContent = yState.planned ?? "–";
     $("y_up").textContent = yState.uploaded ?? "–"; $("y_fail").textContent = yState.failed ?? "–";
     $("y_pause").textContent = yState.paused ? "RESUME" : "PAUSE";
+    $("y_train").textContent = yState.training_status || (yState.training ? "Training is on." : "Training is off.");
+    $("y_trainBtn").textContent = yState.training ? "TURN OFF" : "TURN ON";
   }
   tickOnline();
 }

@@ -19,6 +19,10 @@ def _channel_context(s):
     if (s.get("visual_style") or "stock") == "stickman" or s.get("visual_instructions"):
         bits.append("How the video will look (the editor handles visuals; write narration that fits it): "
                     + ((s.get("visual_instructions") or "").strip()[:1500] or "a crude stickman meme edit over real photos"))
+    from .training import playbook_text
+    pb = playbook_text(s)
+    if pb:
+        bits.append(pb)
     return "\n".join(bits)
 
 

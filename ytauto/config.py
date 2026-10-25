@@ -41,6 +41,8 @@ DEFAULTS = {
     "voice": "en-US-AndrewNeural",  # Microsoft Edge neural voices (free)
     "voice_rate": "+5%",
     "pexels_api_key": "",           # free key from pexels.com/api, used for stock footage
+    "pixabay_api_key": "",          # free key from pixabay.com/api/docs (stock photos + stock video)
+    "unsplash_access_key": "",      # free "Access Key" from unsplash.com/developers (photos)
     "music_folder": "",             # optional: folder of music you have the rights to
     "music_volume": 0.12,
     "visual_style": "stock",        # stock = stock footage/photos + captions | stickman = stickman cutout meme edit
@@ -48,6 +50,15 @@ DEFAULTS = {
     "stickman_captions": False,     # burn word captions in the stickman style
     "captions": True,
     "caption_style": "neon",        # neon | clean
+    # ---- training mode ----
+    "training": {
+        "enabled": False,
+        "stats_every_hours": 4,      # how often to read views/likes/comments
+        "relearn_every_hours": 24,   # how often to rewrite the playbook
+        "follow_topics": True,       # pick new topics similar to the winners when you don't give one
+        "playbook": {},
+        "topics_used": [],
+    },
     # ---- thumbnails ----
     "thumbnails": {"ai_images": True, "text_color": "#7FE9FF", "accent": "#FF2BD6"},
     # ---- upload ----

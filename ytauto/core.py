@@ -15,7 +15,7 @@ import traceback
 from agent import ai, editor, sources, transcribe
 from agent.config import data_dir
 
-from . import render, stickman, studio, thumbs, visuals, writer
+from . import render, stickman, studio, thumbs, training, visuals, writer
 from .config import YTSettings
 
 SCHEMA = """
@@ -36,6 +36,7 @@ YT_HELP = """YouTube commands (send with "yt " in front, e.g. "yt status"):
 status · pause · resume · make long [what it's about] · make short [what it's about] · make short original/repurpose
   e.g. "make short a Halloween special about the Dyatlov Pass" (the text after long/short is followed for that video)
 style stickman / style stock (switch the visual style) · visual <direction> (set the visual direction)
+train on / train off (training mode) · learn (learn from your best videos now) · stats (best videos by views)
 upload (upload the next finished video now) · list · skip <id> · retry <id>
 set <setting> <value> · get <setting> · settings · prompt <text> · ask <question>"""
 
@@ -49,8 +50,13 @@ class YTAgent:
         with self.lock:
             self.conn.executescript(SCHEMA)
             cols = {r[1] for r in self.conn.execute("PRAGMA table_info(items)")}
-            if "brief" not in cols:
-                self.conn.execute("ALTER TABLE items ADD COLUMN brief TEXT")
+            for col, typ in (("brief", "TEXT"), ("views", "INTEGER"), ("likes", "INTEGER"), ("comments", "INTEGER"),
+                             ("stats_at", "REAL"), ("score", "REAL"), ("meta", "TEXT")):
+                if col not in cols:
+                    self.conn.execute(f"ALTER TABLE items ADD COLUMN {col} {typ}")
+            # videos that were being made when NeonClip was closed start over
+            self.conn.execute("UPDATE items SET status='planned' WHERE status='making'")
+            self.conn.execute("UPDATE items SET status='ready' WHERE status='uploading'")
             self.conn.commit()
         self.state_path = os.path.join(data_dir(), "youtube_state.json")
         try:
@@ -121,6 +127,7 @@ class YTAgent:
                 "ready": c.get("ready", 0), "planned": c.get("planned", 0) + c.get("making", 0),
                 "uploaded": c.get("uploaded", 0), "failed": c.get("failed", 0),
                 "next_upload": nxt.strftime("%a %I:%M %p") if nxt else None,
+                "training": bool((self.s.get("training") or {}).get("enabled")), "training_status": training.status_line(self.s),
                 "updated": dt.datetime.now().strftime("%I:%M %p")}
 
     def status_text(self):
@@ -139,6 +146,38 @@ class YTAgent:
     def start(self):
         threading.Thread(target=self._maker_loop, daemon=True, name="yt-maker").start()
         threading.Thread(target=self._upload_loop, daemon=True, name="yt-upload").start()
+        threading.Thread(target=self._training_loop, daemon=True, name="yt-training").start()
+
+    def _training_loop(self):
+        self._stop.wait(90)
+        while not self._stop.is_set():
+            try:
+                t = self.s.get("training") or {}
+                if t.get("enabled") and self.s["setup_done"]:
+                    if time.time() - self.state.get("stats_at", 0) > float(t.get("stats_every_hours", 4)) * 3600:
+                        self.train(learn=False)
+                    pb = t.get("playbook") or {}
+                    if time.time() - (pb.get("learned_at") or 0) > float(t.get("relearn_every_hours", 24)) * 3600:
+                        try:
+                            training.learn(self, self.log)
+                        except RuntimeError as e:
+                            if "at least 4" not in str(e):
+                                raise
+            except Exception as e:
+                self.log("warn", f"Training: {e}")
+            self._stop.wait(900)
+
+    def train(self, learn=True):
+        """Reads the latest stats and (optionally) re-learns the playbook now."""
+        self.set_task("training: reading video stats")
+        try:
+            training.refresh_stats(self, self.log)
+            if learn:
+                self.set_task("training: learning from the best videos")
+                return training.learn(self, self.log)
+        finally:
+            self.set_task("idle")
+            self.push_state()
 
     def stop(self):
         self._stop.set()
@@ -253,6 +292,11 @@ class YTAgent:
         portrait = kind == "short"
         self.set_task(f"writing a {'Short' if portrait else 'video'}")
         brief = (it.get("brief") or "").strip()
+        if not brief and (self.s.get("training") or {}).get("follow_topics", True):
+            topic = training.next_topic(self.s)
+            if topic:
+                brief = f"(Picked by training mode because similar videos did best) Make it about: {topic}"
+                self.update(iid, brief=brief)
         idea = writer.new_idea(self.s, kind, self.past_titles(), brief=brief)
         self.update(iid, title=idea.get("title"))
         sc = writer.script(self.s, kind, idea, brief=brief)
@@ -277,8 +321,11 @@ class YTAgent:
         title = idea.get("title", "")[:100]
         if portrait and "#shorts" not in title.lower():
             desc += "\n#shorts"
+        meta = {"hook": idea.get("hook"), "angle": idea.get("angle"), "style": self.s.get("visual_style") or "stock",
+                "segments": len(sc["segments"]), "duration": round(_dur(out), 1), "thumbnail_text": sc.get("thumbnail_text", ""),
+                "training": bool((self.s.get("training") or {}).get("enabled"))}
         return {"title": title, "description": self._footer(desc), "tags": json.dumps(sc.get("tags") or []),
-                "thumb_text": sc.get("thumbnail_text", ""), "file": out, "thumb": thumb}
+                "thumb_text": sc.get("thumbnail_text", ""), "file": out, "thumb": thumb, "meta": json.dumps(meta)}
 
     def _thumbnail(self, title, text, video, work):
         bg = None
@@ -441,6 +488,11 @@ class YTAgent:
             self.state.setdefault("slots_done", {}).setdefault(day, []).append(slot)
             self.state["slots_done"] = {k: v for k, v in self.state["slots_done"].items() if k >= (dt.date.today() - dt.timedelta(days=3)).isoformat()}
             self.save_state()
+        if not it.get("file") or not os.path.exists(it["file"]):
+            self.update(it["id"], status="planned", file=None)
+            self.log("warn", f"Video #{it['id']}'s file is missing (NeonClip was probably closed while making it), so it will be made again.")
+            self.wake.set()
+            return
         with self.browser_lock:
             self.update(it["id"], status="uploading")
             self.set_task(f"uploading: {(it['title'] or '')[:40]}")
@@ -513,6 +565,22 @@ class YTAgent:
             self.wake.set()
             return (f"🎬 Making a {'Short' if kind == 'short' else 'long video'} now (#{iid})"
                     + (f" about: {brief[:120]}" if brief else "") + ".")
+        if cmd == "train":
+            a = arg.strip().lower()
+            if a in ("on", "off"):
+                s.set("training.enabled", a == "on")
+                if a == "on":
+                    threading.Thread(target=lambda: self._safe_train(), daemon=True).start()
+                return "🧠 Training " + ("ON: reading your video stats and learning now." if a == "on" else "OFF.")
+            return training.status_line(s)
+        if cmd in ("learn", "train_now"):
+            threading.Thread(target=self._safe_train, daemon=True).start()
+            return "🧠 Reading stats and learning from your best videos..."
+        if cmd in ("stats", "best", "leaderboard"):
+            rows = training.leaderboard(self, 10)
+            if not rows:
+                return "No stats yet. Send 'yt learn' to read them."
+            return "\n".join(f"{i}. {r['views']} views · {r['title'][:60]}" for i, r in enumerate(rows, 1))
         if cmd == "style":
             st = arg.strip().lower()
             if st not in ("stickman", "stock"):
@@ -563,6 +631,15 @@ class YTAgent:
                           f"Info: {json.dumps(ctx)[:8000]}\nQuestion: {arg}")
         return self._natural(text)
 
+    def _safe_train(self):
+        try:
+            pb = self.train(learn=True)
+            if self.notifier and pb:
+                tips = "\n".join("• " + d for d in (pb.get("do") or [])[:5])
+                self.notifier.send(f"{pb.get('summary') or ''}\n{tips}", title="▶ YT · 🧠 Playbook", tags=["brain"])
+        except Exception as e:
+            self.log("warn", f"Training: {e}", notify=True, title="🧠 Training")
+
     def _natural(self, text):
         prompt = (YT_HELP + "\n\nYouTube settings (dotted paths for 'set'): " + json.dumps(self.s.masked())[:7000] +
                   "\n\nThe owner sent this from their phone: \"" + text[:6000] + "\"\nTurn it into commands from the list above "
@@ -579,7 +656,7 @@ class YTAgent:
         for c in (data.get("commands") or [])[:8]:
             c = c[3:] if c.lower().startswith("yt ") else c
             if c.split(" ")[0].lower() in ("help", "status", "pause", "resume", "start", "make", "upload", "list", "skip", "retry",
-                                           "set", "get", "settings", "prompt", "ask", "style", "visual"):
+                                           "set", "get", "settings", "prompt", "ask", "style", "visual", "train", "learn", "stats"):
                 r = self.run_command(c)
                 if r:
                     outs.append(r)
@@ -595,6 +672,14 @@ class YTAgent:
 
 class NoSource(Exception):
     pass
+
+
+def _dur(path):
+    try:
+        from agent.tools import media_duration
+        return media_duration(path)
+    except Exception:
+        return 0
 
 
 def _safe(name):

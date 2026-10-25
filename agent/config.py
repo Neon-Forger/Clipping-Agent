@@ -111,7 +111,8 @@ DEFAULTS = {
     },
 }
 
-SECRET_KEYS = {"gemini_api_key", "openrouter_api_key", "openai_compatible_api_key", "token", "pair_code"}
+SECRET_KEYS = {"gemini_api_key", "openrouter_api_key", "openai_compatible_api_key", "token", "pair_code",
+               "pexels_api_key", "pixabay_api_key", "unsplash_access_key"}
 
 _lock = threading.RLock()
 

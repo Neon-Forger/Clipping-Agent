@@ -236,90 +236,8 @@ def g_card(w, h, photo):
     return im
 
 
-# -------------------------------------------------------------------------------------------- photos
-class PhotoSource:
-    """Real photos for backgrounds: Pexels (free key) → Openverse (no key, CC licensed, credited) → AI image."""
-
-    def __init__(self, s, folder, log=None):
-        self.s, self.folder, self.log = s, folder, log
-        self.cache, self.credits, self._warned = {}, [], False
-        os.makedirs(folder, exist_ok=True)
-
-    def get(self, query, portrait):
-        q = (query or self.s.get("genre") or "city").strip()[:60]
-        if q in self.cache:
-            return self.cache[q]
-        img = self._pexels(q, portrait) or self._openverse(q) or self._ai(q, portrait)
-        if img is None and not self._warned and self.log:
-            self._warned = True
-            self.log("warn", "Couldn't get photos for some backgrounds (using black). A free Pexels key "
-                             "(YouTube → SETTINGS) gives the best photos.")
-        self.cache[q] = img
-        return img
-
-    def _download(self, url, name):
-        import requests
-        path = os.path.join(self.folder, name)
-        if not os.path.exists(path):
-            r = requests.get(url, timeout=40, headers={"User-Agent": "NeonClip/2.0"})
-            r.raise_for_status()
-            with open(path, "wb") as f:
-                f.write(r.content)
-        im = Image.open(path)
-        im.load()
-        return im.convert("RGB")
-
-    def _pexels(self, q, portrait):
-        key = self.s.get("pexels_api_key")
-        if not key:
-            return None
-        import requests
-        try:
-            r = requests.get("https://api.pexels.com/v1/search", headers={"Authorization": key}, timeout=30,
-                             params={"query": q, "per_page": 10, "orientation": "portrait" if portrait else "landscape"})
-            r.raise_for_status()
-            photos = r.json().get("photos", [])
-            random.shuffle(photos)
-            for p in photos[:3]:
-                try:
-                    return self._download(p["src"]["large2x"], f"px-{p['id']}.jpg")
-                except Exception:
-                    continue
-        except Exception:
-            return None
-        return None
-
-    def _openverse(self, q):
-        import requests
-        try:
-            r = requests.get("https://api.openverse.org/v1/images/", timeout=30, headers={"User-Agent": "NeonClip/2.0"},
-                             params={"q": q, "page_size": 12, "mature": "false", "license_type": "commercial,modification"})
-            r.raise_for_status()
-            res = [x for x in r.json().get("results", []) if (x.get("width") or 0) >= 800]
-            random.shuffle(res)
-            for x in res[:4]:
-                try:
-                    im = self._download(x["url"], f"ov-{x['id']}.img")
-                    lic = (x.get("license") or "").upper()
-                    self.credits.append(f"\"{x.get('title') or 'photo'}\" by {x.get('creator') or 'unknown'} ({'CC ' + lic if lic not in ('CC0', 'PDM') else lic}) {x.get('foreign_landing_url') or ''}".strip())
-                    return im
-                except Exception:
-                    continue
-        except Exception:
-            return None
-        return None
-
-    def _ai(self, q, portrait):
-        if not self.s.get("thumbnails", {}).get("ai_images"):
-            return None
-        p = os.path.join(self.folder, f"ai-{abs(hash(q)) % 10 ** 8}.png")
-        got = visuals.ai_image(self.s["ai"], f"Realistic stock photo: {q}. No people's faces", p, "9:16" if portrait else "16:9")
-        if got:
-            try:
-                return Image.open(got).convert("RGB")
-            except Exception:
-                return None
-        return None
+# photos come from ytauto/photos.py (several services)
+from .photos import PhotoSource  # noqa: E402
 
 
 # ------------------------------------------------------------------------------------------- planning
@@ -354,6 +272,10 @@ Return JSON: {{"segments": [{{"beats": [{{"bg": "...", "query": "...", "pose": "
 
 def plan(s, segs, log=None):
     direction = (s.get("visual_instructions") or "").strip() or "Crude stickman cutout over real stock photos, hard cuts, punch-in zooms on reveals."
+    from .training import playbook_text
+    vnotes = playbook_text(s, for_visuals=True)
+    if vnotes:
+        direction += "\n" + vnotes
     lines = []
     for i, sg in enumerate(segs):
         lines.append(f"{i + 1}. ({sg['beats']} beats, {sg['dur']:.1f}s) {sg['text']}")
@@ -596,6 +518,8 @@ def build(s, segments, portrait, work, out_path, log=None):
         except Exception:
             pass
         raise
+    if log:
+        log("info", f"Photos used: {photos.summary()}" + ("" if photos.got else f" ({photos.status_text()})"))
     captions = bool(s.get("stickman_captions", False))
     if captions and not os.path.isdir(os.path.join(work, "fonts")):
         import shutil

@@ -116,13 +116,59 @@ class YouTubeView:
         ttk.Button(b, text="Make a Short now", command=lambda: self._make("short")).pack(side="left", padx=6)
         ttk.Button(b, text="Upload next now", command=lambda: self._cmd("upload")).pack(side="left", padx=6)
         ttk.Button(b, text="Open videos folder", command=lambda: open_path(self._outdir())).pack(side="left", padx=6)
+        tr = ttk.Frame(f, style="Card.TFrame", padding=12)
+        tr.pack(fill="x", padx=6, pady=4)
+        row = ttk.Frame(tr, style="Card.TFrame")
+        row.pack(fill="x")
+        ttk.Label(row, text="🧠 TRAINING MODE", style="Big.TLabel").pack(side="left")
+        self.train_var = tk.BooleanVar(value=bool((self.yt.s.get("training") or {}).get("enabled")))
+        ttk.Checkbutton(row, text="Learn from my best videos and make more like them", variable=self.train_var,
+                        style="Card.TCheckbutton", command=lambda: self._cmd("train " + ("on" if self.train_var.get() else "off"))).pack(side="left", padx=14)
+        ttk.Button(row, text="Learn now", command=lambda: self._cmd("learn")).pack(side="right")
+        ttk.Button(row, text="Best videos", command=self._show_best).pack(side="right", padx=6)
+        self.train_lbl = ttk.Label(tr, text="", style="CardMuted.TLabel", wraplength=1000, justify="left")
+        self.train_lbl.pack(anchor="w", pady=(6, 0))
         ttk.Label(f, text="Activity", style="Muted.TLabel").pack(anchor="w", padx=8)
-        self.logbox = tk.Text(f, bg=PANEL, fg=FG, insertbackground=FG, relief="flat", font=(theme.MONO, 10), wrap="word")
+        self.logbox = tk.Text(f, bg=PANEL, fg=FG, insertbackground=FG, relief="flat", font=(theme.MONO, 10), wrap="word", height=8)
         self.logbox.pack(fill="both", expand=True, padx=6, pady=(2, 6))
         self.logbox.tag_config("error", foreground=theme.RED)
         self.logbox.tag_config("warn", foreground=theme.GOLD)
         for e in reversed(self.yt.q("SELECT level, text FROM events ORDER BY id DESC LIMIT 120")):
             self._append(e["level"], e["text"])
+
+    def _train_text(self):
+        from . import training
+        t = self.yt.s.get("training") or {}
+        pb = t.get("playbook") or {}
+        lines = [training.status_line(self.yt.s)]
+        if pb.get("summary"):
+            lines.append(pb["summary"])
+        if pb.get("do"):
+            lines.append("Doing more of: " + "; ".join(pb["do"][:4]))
+        if pb.get("topics") and t.get("enabled"):
+            used = set(t.get("topics_used") or [])
+            nxt = [x for x in pb["topics"] if x not in used][:3]
+            if nxt:
+                lines.append("Next topics: " + " · ".join(nxt))
+        return "\n".join(lines)
+
+    def _show_best(self):
+        from . import training
+        top = tk.Toplevel(self.root, bg=BG)
+        top.title("Best videos")
+        top.geometry("820x480")
+        cols = ("views", "likes", "comments", "kind", "title")
+        tv = ttk.Treeview(top, columns=cols, show="headings")
+        for c, w in zip(cols, (90, 70, 90, 60, 480)):
+            tv.heading(c, text=c.upper())
+            tv.column(c, width=w, anchor="w")
+        tv.pack(fill="both", expand=True, padx=10, pady=10)
+        rows = training.leaderboard(self.yt, 50)
+        for r in rows:
+            tv.insert("", "end", values=(r["views"], r["likes"] if r["likes"] is not None else "", r["comments"] if r["comments"] is not None else "",
+                                         r["kind"], r["title"]))
+        if not rows:
+            ttk.Label(top, text="No stats yet. Click \"Learn now\" on the dashboard.", style="Muted.TLabel").pack(pady=8)
 
     def _make(self, kind):
         brief = " ".join(self.brief_var.get().split())
@@ -136,9 +182,9 @@ class YouTubeView:
 
     # -------------------------------------------------------------- videos
     def _videos(self, f):
-        cols = ("id", "kind", "mode", "status", "title", "link")
+        cols = ("id", "kind", "mode", "status", "views", "title", "link")
         tv = ttk.Treeview(f, columns=cols, show="headings")
-        for c, w in zip(cols, (50, 60, 90, 90, 520, 260)):
+        for c, w in zip(cols, (50, 60, 90, 90, 70, 460, 240)):
             tv.heading(c, text=c.upper())
             tv.column(c, width=w, anchor="w")
         tv.pack(fill="both", expand=True, padx=6, pady=8)
@@ -157,7 +203,8 @@ class YouTubeView:
     def _fill(self):
         self.tv.delete(*self.tv.get_children())
         for r in self.yt.q("SELECT * FROM items ORDER BY id DESC LIMIT 300"):
-            self.tv.insert("", "end", iid=str(r["id"]), values=(r["id"], r["kind"], r["mode"], r["status"], r["title"] or "(writing)", r["url"] or ""))
+            self.tv.insert("", "end", iid=str(r["id"]), values=(r["id"], r["kind"], r["mode"], r["status"],
+                                                               "" if r.get("views") is None else r["views"], r["title"] or "(writing)", r["url"] or ""))
 
     def _selid(self):
         s = self.tv.selection()
@@ -437,7 +484,9 @@ class YouTubeView:
                                ("ai.openai_compatible_api_key", "Other API key", "secret"), ("ai.openai_compatible_model", "Other model", "")]),
         ("Voice & footage", [("voice", "Voice (e.g. en-US-AndrewNeural, en-US-AriaNeural, en-GB-RyanNeural)", ""),
                              ("voice_rate", "Voice speed (e.g. +5% or -5%)", ""),
-                             ("pexels_api_key", "Pexels API key (free stock footage: pexels.com/api)", "secret"),
+                             ("pexels_api_key", "Pexels API key (optional: pexels.com/api)", "secret"),
+                             ("pixabay_api_key", "Pixabay API key (free photos + stock video: pixabay.com/api/docs)", "secret"),
+                             ("unsplash_access_key", "Unsplash Access Key (free photos: unsplash.com/developers)", "secret"),
                              ("music_folder", "Background music folder (only music you have rights to)", "dir"),
                              ("music_volume", "Music volume (0-1)", "float"), ("captions", "Burn in captions", "bool"),
                              ("thumbnails.ai_images", "Use AI images (thumbnails / visuals when no footage)", "bool")]),
@@ -476,6 +525,16 @@ class YouTubeView:
         b.pack(fill="x", padx=8, pady=14)
         ttk.Button(b, text="Save settings", style="Accent.TButton", command=self._save_settings).pack(side="left")
         ttk.Button(b, text="Edit all settings (youtube.json)", command=lambda: open_path(self.yt.s.path)).pack(side="left", padx=8)
+        ttk.Button(b, text="Test photo sources", command=self._test_photos).pack(side="left")
+
+    def _test_photos(self):
+        from agent.config import data_dir as _dd
+        from . import photos
+
+        def go():
+            return photos.test_sources(self.yt.s, os.path.join(_dd(), "yt-work", "_photos"))
+        self._bg(go, done=lambda rep: messagebox.showinfo("Photo sources", rep + "\n\nOpenverse and Wikimedia need no key. "
+                                                                            "Keys make photos more reliable and add stock video (Pixabay)."))
 
     def _save_settings(self):
         for key, (v, kind) in self.svars.items():
@@ -530,6 +589,8 @@ class YouTubeView:
         self.next_lbl.config(text=f"Next upload: {st['next_upload'] or 'when a video is ready'}")
         self.head_lbl.config(text=f"{st['channel'] or 'no channel yet'} · {st['genre'] or 'no genre yet'}")
         self.pause_btn.config(text="Resume" if st["paused"] else "Pause")
+        self.train_lbl.config(text=self._train_text())
+        self.train_var.set(bool(st.get("training")))
 
     def _refresh(self):
         try:
