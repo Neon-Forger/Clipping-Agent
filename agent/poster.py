@@ -123,6 +123,91 @@ def open_plain(posting_cfg, urls, prefix="browser-profile", max_minutes=30, log=
     return "automation browser"
 
 
+CDP_PORTS = {"browser-profile": 9331, "yt-profile": 9332}
+
+
+def _cdp_alive(port):
+    import requests
+    try:
+        r = requests.get(f"http://127.0.0.1:{port}/json/version", timeout=2, proxies={"http": None, "https": None})
+        return r.ok
+    except Exception:
+        return False
+
+
+def ensure_cdp_browser(posting_cfg, prefix="browser-profile", log=None, urls=None):
+    """Starts the section's browser as a NORMAL browser (so Google & co. treat it like any browser),
+    with a local remote-debugging port so NeonClip can drive it. Reuses it if it's already open.
+    Returns the port."""
+    import subprocess
+    port = CDP_PORTS.get(prefix, 9339)
+    if _cdp_alive(port):
+        return port
+    errors = []
+    for name, kw, exe in browser_targets(posting_cfg, prefix):
+        if not exe or not os.path.isfile(exe):
+            continue
+        cmd = [exe, f"--remote-debugging-port={port}", f"--user-data-dir={kw['user_data_dir']}", "--no-first-run",
+               "--no-default-browser-check", "--remote-allow-origins=*"] + list(urls or ["about:blank"])
+        try:
+            proc = subprocess.Popen(cmd)
+        except Exception as e:
+            errors.append(f"{name}: {e}")
+            continue
+        for _ in range(40):
+            if _cdp_alive(port):
+                if log:
+                    log("info", f"Opened {name} for this section.")
+                return port
+            time.sleep(0.5)
+        errors.append(f"{name} didn't open its control port")
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    raise RuntimeError("Couldn't open a browser NeonClip can use: " + " | ".join(errors or ["no browser .exe found"]))
+
+
+class CDPContext:
+    """Looks like a Playwright context, but only ever touches tabs it opened itself (never yours)."""
+
+    def __init__(self, browser):
+        self.browser = browser
+        self.ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+        self._mine = []
+
+    @property
+    def pages(self):
+        return [p for p in self._mine if not p.is_closed()]
+
+    def new_page(self):
+        pg = self.ctx.new_page()
+        self._mine.append(pg)
+        return pg
+
+    def cookies(self, *a):
+        return self.ctx.cookies(*a)
+
+    def add_cookies(self, c):
+        return self.ctx.add_cookies(c)
+
+    def on(self, *a):
+        return self.ctx.on(*a)
+
+    def close(self):
+        for pg in self.pages:
+            try:
+                pg.close()
+            except Exception:
+                pass
+
+
+def connect(p, posting_cfg, prefix="browser-profile", log=None):
+    port = ensure_cdp_browser(posting_cfg, prefix, log)
+    browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+    return CDPContext(browser)
+
+
 def _human_pause(a=0.6, b=1.6):
     time.sleep(random.uniform(a, b))
 
@@ -173,7 +258,7 @@ def tiktok_qr_login(posting_cfg, on_qr, should_stop, log=None, max_minutes=5):
             last_shot = 0
             while time.time() < end and not should_stop():
                 if any(c["name"] == "sessionid" and c["value"] for c in ctx.cookies("https://www.tiktok.com")):
-                    time.sleep(3)
+                    page.wait_for_timeout(3 * 1000)
                     return True
                 if time.time() - last_shot > 4:
                     last_shot = time.time()
@@ -195,7 +280,7 @@ def tiktok_qr_login(posting_cfg, on_qr, should_stop, log=None, max_minutes=5):
                     if not shot:
                         shot = page.screenshot()
                     on_qr(shot)
-                time.sleep(1)
+                page.wait_for_timeout(1 * 1000)
             return False
         finally:
             try:
@@ -245,7 +330,7 @@ def import_cookies(service, cookie_header, posting_cfg, log):
                 url, bad = CHECK_URLS[service]
                 page = ctx.pages[0] if ctx.pages else ctx.new_page()
                 page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                time.sleep(5)
+                page.wait_for_timeout(5 * 1000)
                 if bad in page.url:
                     return f"cookies saved, but {service} still shows the sign-in page"
                 return "signed in ✅"
@@ -271,7 +356,7 @@ def _dismiss_popups(page):
             for i in range(min(b.count(), 3)):
                 if b.nth(i).is_visible():
                     b.nth(i).click(timeout=2000)
-                    time.sleep(0.5)
+                    page.wait_for_timeout(0.5 * 1000)
         except Exception:
             pass
 
@@ -313,7 +398,7 @@ def post_to_tiktok(video_path, caption, posting_cfg, sel, log):
                     if page.locator("[data-e2e=upload_status_container]").count() else ""
                 if sel.get("tiktok_uploaded_text", "Uploaded") in txt:
                     break
-                time.sleep(2)
+                page.wait_for_timeout(2 * 1000)
             else:
                 raise RuntimeError("TikTok upload did not finish within 15 minutes")
             _human_pause(1.5, 3)
@@ -350,14 +435,14 @@ def post_to_tiktok(video_path, caption, posting_cfg, sel, log):
                 dis = btn.get_attribute("aria-disabled") == "true" or btn.is_disabled()
                 if not dis:
                     break
-                time.sleep(2)
+                page.wait_for_timeout(2 * 1000)
             btn.scroll_into_view_if_needed()
             _human_pause(1, 2)
             btn.click()
             log("info", "Clicked Post")
             # some accounts get an extra "Post now" confirmation (e.g. while checks are still running)
             for _ in range(8):
-                time.sleep(2)
+                page.wait_for_timeout(2 * 1000)
                 for label in ("Post now", "Post anyway", "Continue"):
                     b = page.get_by_role("button", name=label)
                     if b.count() and b.first.is_visible():
@@ -371,12 +456,12 @@ def post_to_tiktok(video_path, caption, posting_cfg, sel, log):
             deadline = time.time() + 420
             while time.time() < deadline:
                 page.goto(sel["tiktok_content_url"], wait_until="domcontentloaded")
-                time.sleep(6)
+                page.wait_for_timeout(6 * 1000)
                 links = _video_links(page, sel["tiktok_video_link"])
                 new = [l for l in links if l not in known]
                 if new:
                     return new[0]
-                time.sleep(15)
+                page.wait_for_timeout(15 * 1000)
             raise RuntimeError("Posted, but couldn't find the new video's link on TikTok Studio")
         finally:
             try:
@@ -425,20 +510,20 @@ def submit_to_content_rewards(campaign_url, tiktok_url, posting_cfg, sel, log):
             for _ in range(20):
                 if submit.get_attribute("aria-disabled") != "true":
                     break
-                time.sleep(1)
+                page.wait_for_timeout(1 * 1000)
             problems = dlg.inner_text()
             if submit.get_attribute("aria-disabled") == "true":
                 raise RuntimeError("Content Rewards wouldn't accept the link: " + " ".join(problems.split())[:300])
             submit.click()
             log("info", "Submitted link on Content Rewards")
-            time.sleep(6)
+            page.wait_for_timeout(6 * 1000)
             msg = ""
             if dlg.is_visible():
                 msg = " ".join(dlg.inner_text().split())[:300]
             # verify
             page.goto(sel["cr_submissions_url"], wait_until="domcontentloaded")
             for _ in range(6):
-                time.sleep(5)
+                page.wait_for_timeout(5 * 1000)
                 html = page.content()
                 if vid in html:
                     return "verified"
