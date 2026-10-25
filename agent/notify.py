@@ -92,7 +92,13 @@ class Ntfy:
                                 on_command(text)
                             except Exception as e:
                                 self.send(f"Command failed: {e}", title="⚠️ Error", tags=["warning"])
-            except requests.exceptions.ReadTimeout:
+            except (requests.exceptions.ReadTimeout, requests.exceptions.ChunkedEncodingError):
+                continue
+            except requests.exceptions.ConnectionError as e:
+                if "timed out" in str(e).lower():
+                    continue  # normal: the long-poll connection was idle; just reconnect
+                self.log("warn", f"Phone link reconnecting: {e}")
+                time.sleep(10)
                 continue
             except Exception as e:
                 self.log("warn", f"ntfy listen error: {e}")

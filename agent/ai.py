@@ -11,18 +11,71 @@ class NoAIKey(Exception):
     pass
 
 
-def _gemini(cfg, prompt, json_mode):
-    key = cfg.get("gemini_api_key")
-    model = cfg.get("gemini_model") or "gemini-2.5-flash"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+class AIError(RuntimeError):
+    """The AI service answered with an error (bad model, quota, outage). Worth retrying later."""
+
+
+GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
+_gemini_auto = {}
+
+
+def pick_gemini_model(key):
+    """Asks Google which models this key can use and picks the best general 'flash' model
+    (Google retires model names over time, e.g. gemini-2.5-flash shut down on 16 Oct 2026)."""
+    if key in _gemini_auto:
+        return _gemini_auto[key]
+    r = requests.get(f"{GEMINI_BASE}/models?pageSize=200", headers={"x-goog-api-key": key}, timeout=30)
+    r.raise_for_status()
+    names = []
+    for m in r.json().get("models", []):
+        if "generateContent" not in (m.get("supportedGenerationMethods") or []):
+            continue
+        n = m.get("name", "").split("/")[-1]
+        if not n.startswith("gemini") or any(x in n for x in ("image", "tts", "audio", "live", "embedding", "thinking", "exp", "robotics", "computer")):
+            continue
+        names.append(n)
+
+    def score(n):
+        ver = re.findall(r"gemini-(\d+(?:\.\d+)?)", n)
+        v = float(ver[0]) if ver else 0
+        return (("flash" in n and "lite" not in n) * 4 + ("pro" in n) * 2 + ("lite" in n) * 1,
+                v, "preview" not in n, -len(n))
+    if not names:
+        raise RuntimeError("this Gemini key can't use any text models")
+    best = max(names, key=score)
+    _gemini_auto[key] = best
+    return best
+
+
+def _gemini_call(key, model, prompt, json_mode):
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.6}}
     if json_mode:
         body["generationConfig"]["responseMimeType"] = "application/json"
-    r = requests.post(url, json=body, timeout=300)
-    r.raise_for_status()
+    return requests.post(f"{GEMINI_BASE}/models/{model}:generateContent", json=body,
+                         headers={"x-goog-api-key": key}, timeout=300)
+
+
+def _gemini(cfg, prompt, json_mode):
+    key = cfg.get("gemini_api_key")
+    model = (cfg.get("gemini_model") or "").strip() or "auto"
+    if model == "auto":
+        model = pick_gemini_model(key)
+    r = _gemini_call(key, model, prompt, json_mode)
+    if r.status_code == 404:  # model retired / not available: pick one that exists
+        model = pick_gemini_model(key)
+        r = _gemini_call(key, model, prompt, json_mode)
+    if r.status_code >= 400:
+        try:
+            msg = r.json().get("error", {}).get("message", "")
+        except Exception:
+            msg = r.text[:200]
+        raise RuntimeError(f"Gemini {r.status_code} ({model}): {msg[:300]}")
     data = r.json()
-    return "".join(p.get("text", "") for p in data["candidates"][0]["content"]["parts"])
+    cands = data.get("candidates") or []
+    if not cands:
+        raise RuntimeError(f"Gemini returned no answer: {str(data.get('promptFeedback', ''))[:200]}")
+    return "".join(p.get("text", "") for p in cands[0].get("content", {}).get("parts", []))
 
 
 def _openai_like(base_url, key, model, prompt, json_mode, extra_headers=None):
@@ -47,7 +100,7 @@ def ask(cfg, prompt, json_mode=False):
                 return _gemini(cfg, prompt, json_mode)
             if prov == "openrouter" and cfg.get("openrouter_api_key"):
                 return _openai_like("https://openrouter.ai/api/v1", cfg["openrouter_api_key"],
-                                    cfg.get("openrouter_model") or "google/gemini-2.5-flash", prompt, json_mode,
+                                    cfg.get("openrouter_model") or "openrouter/auto", prompt, json_mode,
                                     {"HTTP-Referer": "https://github.com/Neon-Forger/clipping-agent", "X-Title": "Clip Cartel Agent"})
             if prov == "openai_compatible" and cfg.get("openai_compatible_api_key"):
                 return _openai_like(cfg.get("openai_compatible_base_url") or "https://api.openai.com/v1",
@@ -56,7 +109,11 @@ def ask(cfg, prompt, json_mode=False):
         except Exception as e:
             errors.append(f"{prov}: {e}")
     if errors:
-        raise RuntimeError("All AI providers failed: " + " | ".join(errors))
+        msg = " | ".join(errors)
+        for k in ("gemini_api_key", "openrouter_api_key", "openai_compatible_api_key"):
+            if cfg.get(k):
+                msg = msg.replace(cfg[k], "***")
+        raise AIError("All AI providers failed: " + msg)
     raise NoAIKey("No AI API key set. Add a Gemini, OpenRouter or OpenAI-compatible key in Settings.")
 
 

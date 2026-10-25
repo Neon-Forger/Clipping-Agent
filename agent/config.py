@@ -47,9 +47,9 @@ DEFAULTS = {
     "ai": {
         "provider_order": ["gemini", "openrouter", "openai_compatible"],
         "gemini_api_key": "",
-        "gemini_model": "gemini-2.5-flash",
+        "gemini_model": "auto",       # "auto" picks the newest available flash model
         "openrouter_api_key": "",
-        "openrouter_model": "google/gemini-2.5-flash",
+        "openrouter_model": "openrouter/auto",
         "openai_compatible_base_url": "https://api.openai.com/v1",
         "openai_compatible_api_key": "",
         "openai_compatible_model": "gpt-4o-mini",
@@ -141,6 +141,12 @@ class Settings:
                 except Exception:
                     pass
             changed = False
+            if self.data["ai"].get("gemini_model") in ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"):
+                self.data["ai"]["gemini_model"] = "auto"
+                changed = True
+            if self.data["ai"].get("openrouter_model") == "google/gemini-2.5-flash":
+                self.data["ai"]["openrouter_model"] = "openrouter/auto"
+                changed = True
             if not self.data["ntfy"].get("topic"):
                 self.data["ntfy"]["topic"] = "clipcartel-" + secrets.token_hex(6)
                 changed = True

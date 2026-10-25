@@ -19,7 +19,7 @@ from .notify import Ntfy
 
 HELP = """Commands you can send from the phone:
 status · pause · resume · run (check for new videos now) · post (post the next clip now)
-list (clips waiting) · skip <id> · retry <id>
+list (clips waiting) · skip <id> · retry <id> · retry videos
 clip <video url> [how many] (clip a specific video)
 set <setting> <value> · get <setting> · settings
 prompt <text> (extra instructions for the AI editor) · prompt clear
@@ -205,7 +205,8 @@ class Agent:
         return {"name": name, "required_hashtags": [], "extra_hashtags": [], "clips_per_video": 5}
 
     def _process_next_video(self):
-        pending = self.db.q("SELECT * FROM videos WHERE status IN ('new','downloaded','transcribed') ORDER BY created LIMIT 1")
+        statuses = "'new','downloaded'" if time.time() < self.state.get("ai_retry_at", 0) else "'new','downloaded','transcribed'"
+        pending = self.db.q(f"SELECT * FROM videos WHERE status IN ({statuses}) ORDER BY created LIMIT 1")
         if not pending:
             return
         v = pending[0]
@@ -234,9 +235,16 @@ class Agent:
                 self.state["ai_key_warned"] = True
                 self.save_state()
                 self.log("warn", str(e), notify=True, title="🔑 AI key needed", tags=["key"], priority=4)
+        except ai.AIError as e:
+            # the AI service failed (retired model, quota, outage): keep the video and try again in 20 min
+            self.state["ai_retry_at"] = time.time() + 1200
+            self.save_state()
+            self.log("error", f"AI step failed on {v['title']}, will retry in 20 min: {e}", notify=True,
+                     title="⚠️ AI error", tags=["warning"])
         except Exception as e:
             self.db.update_video(v["id"], status="failed", error=str(e)[:500])
-            self.log("error", f"Failed on {v['title']}: {e}", notify=True, title="⚠️ Video failed", tags=["warning"])
+            self.log("error", f"Failed on {v['title']}: {e}\nSend 'retry videos' (or Dashboard → Retry failed videos) to try again.",
+                     notify=True, title="⚠️ Video failed", tags=["warning"])
             logging.error(traceback.format_exc())
 
     def _select_and_render(self, v, src, work, n=None):
@@ -450,6 +458,8 @@ class Agent:
         if cmd == "skip" and arg.isdigit():
             self.db.update_clip(int(arg), status="skipped")
             return f"Skipped clip #{arg}."
+        if cmd == "retry" and arg.lower() in ("videos", "video", "failed", "all"):
+            return self.retry_failed_videos()
         if cmd == "retry" and arg.isdigit():
             c = self.db.clip(int(arg))
             if c and c.get("file") and os.path.exists(c["file"]):
@@ -549,12 +559,36 @@ class Agent:
             info = sources.video_info(url)
             src = self._source_for(info) or (self.settings["sources"][0] if self.settings["sources"] else {"name": "manual"})
             if not self.db.add_video(info["id"], src.get("name", "manual"), info.get("webpage_url") or url, info.get("title", ""), info.get("duration")):
-                self.db.update_video(info["id"], status="new", error=None)  # clip it again (skips moments already used)
+                old = self.db.video(info["id"])
+                tr = os.path.join(data_dir(), "work", info["id"], "transcript.json")
+                has_file = old.get("path") and os.path.exists(old["path"])
+                st = "transcribed" if (has_file and os.path.exists(tr)) else ("downloaded" if has_file else "new")
+                self.db.update_video(info["id"], status=st, error=None, source=src.get("name", "manual"),
+                                     transcript=tr if st == "transcribed" else old.get("transcript"))
+                self.state.pop("ai_retry_at", None)
             if n:
                 self.state.setdefault("clip_counts", {})[info["id"]] = n
             self.wake.set()
         except Exception as e:
             self.log("error", f"Couldn't clip {url}: {e}", notify=True, title="⚠️ Clip failed")
+
+    def retry_failed_videos(self):
+        n = 0
+        for v in self.db.q("SELECT * FROM videos WHERE status='failed'"):
+            tr = os.path.join(data_dir(), "work", v["id"], "transcript.json")
+            if os.path.exists(tr) and v.get("path") and os.path.exists(v["path"]):
+                st = "transcribed"
+            elif v.get("path") and os.path.exists(v["path"]):
+                st = "downloaded"
+            else:
+                st = "new"  # re-download; a saved transcript is reused
+            self.db.update_video(v["id"], status=st, error=None,
+                                 transcript=tr if st == "transcribed" else v.get("transcript"))
+            n += 1
+        self.state.pop("ai_retry_at", None)
+        self.save_state()
+        self.wake.set()
+        return f"🔁 Retrying {n} failed video(s)." if n else "No failed videos."
 
     def _source_for(self, info):
         """The source a video belongs to: listed in its video links, or from the channel it watches."""

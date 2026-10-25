@@ -122,6 +122,7 @@ class App:
         ttk.Button(btns, text="Check for new videos", command=lambda: self._cmd("run")).pack(side="left", padx=(0, 6))
         ttk.Button(btns, text="Post next clip now", command=lambda: self._cmd("post")).pack(side="left", padx=6)
         ttk.Button(btns, text="Clip a video link...", command=self._clip_link).pack(side="left", padx=6)
+        ttk.Button(btns, text="Retry failed videos", command=lambda: self._cmd("retry videos")).pack(side="left", padx=6)
         ttk.Button(btns, text="Open clips folder", command=lambda: open_path(self._outdir())).pack(side="left", padx=6)
         ttk.Label(f, text="Activity", style="Muted.TLabel").pack(anchor="w", padx=8)
         self.logbox = tk.Text(f, bg=PANEL, fg=FG, insertbackground=FG, relief="flat", font=("Consolas", 10), wrap="word")
