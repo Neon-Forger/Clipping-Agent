@@ -101,7 +101,7 @@ def ask(cfg, prompt, json_mode=False):
             if prov == "openrouter" and cfg.get("openrouter_api_key"):
                 return _openai_like("https://openrouter.ai/api/v1", cfg["openrouter_api_key"],
                                     cfg.get("openrouter_model") or "openrouter/auto", prompt, json_mode,
-                                    {"HTTP-Referer": "https://github.com/Neon-Forger/clipping-agent", "X-Title": "Clip Cartel Agent"})
+                                    {"HTTP-Referer": "https://github.com/Neon-Forger/clipping-agent", "X-Title": "NeonClip"})
             if prov == "openai_compatible" and cfg.get("openai_compatible_api_key"):
                 return _openai_like(cfg.get("openai_compatible_base_url") or "https://api.openai.com/v1",
                                     cfg["openai_compatible_api_key"], cfg.get("openai_compatible_model") or "gpt-4o-mini",

@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "ClipCartel"
+rootProject.name = "NeonClip"
 include(":app")

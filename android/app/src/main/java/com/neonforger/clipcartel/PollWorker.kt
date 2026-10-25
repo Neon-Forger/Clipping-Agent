@@ -36,7 +36,7 @@ class PollWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params) {
                 val m = JSONObject(line)
                 if (m.optString("event") != "message") return@forEach
                 newest = m.optString("id", newest)
-                val title = m.optString("title", "Clip Cartel")
+                val title = m.optString("title", "NeonClip")
                 if (title.startsWith("__")) return@forEach
                 Notifier.show(applicationContext, m.optString("id").hashCode(), title,
                     m.optString("message"), m.optInt("priority", 3))

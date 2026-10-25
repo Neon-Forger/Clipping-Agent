@@ -1,4 +1,4 @@
-"""The PC window for Clip Cartel Agent."""
+"""NeonClip → Clipping section (Content Rewards / TikTok)."""
 import json
 import os
 import queue
@@ -9,17 +9,15 @@ import tkinter as tk
 import webbrowser
 from tkinter import filedialog, messagebox, ttk
 
+from neonclip import theme
+from neonclip.theme import BG, FG, MUTED, PANEL
+from neonclip.theme import ICE as YEL
+from neonclip.theme import PINK as RED
+
 from . import poster
 from .config import data_dir
 
-BG = "#0B0B0C"
-PANEL = "#16161A"
-FG = "#F2F2F2"
-MUTED = "#9A9AA5"
-RED = "#E5252A"
-YEL = "#FFD400"
-
-APK_URL = "https://neon-forger.github.io/NeonFuel/#clipcartel"
+APK_URL = "https://neon-forger.github.io/NeonFuel/#neonclip"
 
 
 def open_path(p):
@@ -31,70 +29,32 @@ def open_path(p):
         subprocess.Popen(["xdg-open", p])
 
 
-class App:
-    def __init__(self, agent):
+class ClippingView:
+    """Builds the Clipping section inside `container`. Completely separate from the YouTube section."""
+
+    def __init__(self, agent, root, container):
         self.agent = agent
+        self.root = root
         self.q = queue.Queue()
         agent.listeners.append(lambda lvl, txt: self.q.put((lvl, txt)))
-        self.root = tk.Tk()
-        self.root.title("Clip Cartel Agent")
-        self.root.geometry("1100x760")
-        self.root.configure(bg=BG)
-        try:
-            from .config import resource_path
-            self.root.iconphoto(True, tk.PhotoImage(file=resource_path("assets", "icon.png")))
-        except Exception:
-            pass
-        self._style()
+        self.frame = ttk.Frame(container)
         self._build()
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(300, self._pump)
         self.root.after(1000, self._refresh)
 
-    # ------------------------------------------------------------- styling
-    def _style(self):
-        st = ttk.Style(self.root)
-        try:
-            st.theme_use("clam")
-        except Exception:
-            pass
-        st.configure(".", background=BG, foreground=FG, fieldbackground=PANEL, font=("Segoe UI", 10))
-        st.configure("TNotebook", background=BG, borderwidth=0)
-        st.configure("TNotebook.Tab", background=PANEL, foreground=MUTED, padding=(16, 8), font=("Segoe UI Semibold", 10))
-        st.map("TNotebook.Tab", background=[("selected", RED)], foreground=[("selected", "#fff")])
-        st.configure("TFrame", background=BG)
-        st.configure("Card.TFrame", background=PANEL)
-        st.configure("TLabel", background=BG, foreground=FG)
-        st.configure("Card.TLabel", background=PANEL, foreground=FG)
-        st.configure("Muted.TLabel", background=BG, foreground=MUTED)
-        st.configure("Big.TLabel", background=PANEL, foreground=FG, font=("Segoe UI Black", 20))
-        st.configure("Num.TLabel", background=PANEL, foreground=YEL, font=("Segoe UI Black", 26))
-        st.configure("TButton", background=PANEL, foreground=FG, padding=(12, 7), borderwidth=0)
-        st.map("TButton", background=[("active", "#2A2A31")])
-        st.configure("Accent.TButton", background=RED, foreground="#fff", font=("Segoe UI Semibold", 10))
-        st.map("Accent.TButton", background=[("active", "#C71F23")])
-        st.configure("Treeview", background=PANEL, fieldbackground=PANEL, foreground=FG, rowheight=26, borderwidth=0)
-        st.configure("Treeview.Heading", background="#202026", foreground=MUTED)
-        st.map("Treeview", background=[("selected", "#3A1416")])
-        st.configure("TEntry", fieldbackground="#202026", foreground=FG, insertcolor=FG)
-        st.configure("TCheckbutton", background=BG, foreground=FG)
-        st.configure("TCombobox", fieldbackground="#202026", foreground=FG)
-
-    # --------------------------------------------------------------- layout
     def _build(self):
-        head = tk.Frame(self.root, bg=BG)
-        head.pack(fill="x", padx=18, pady=(14, 6))
-        tk.Label(head, text="CLIP", bg=BG, fg=FG, font=("Segoe UI Black", 22)).pack(side="left")
-        tk.Label(head, text=" CARTEL", bg=BG, fg=RED, font=("Segoe UI Black", 22)).pack(side="left")
-        tk.Label(head, text="  agent", bg=BG, fg=MUTED, font=("Segoe UI", 14)).pack(side="left", pady=(8, 0))
-        self.pause_btn = ttk.Button(head, text="Pause", command=self._toggle_pause, style="Accent.TButton")
+        head = ttk.Frame(self.frame)
+        head.pack(fill="x", padx=14, pady=(10, 0))
+        theme.neon_title(head, "CLIPPING", accent=theme.PINK, size=18).pack(side="left")
+        ttk.Label(head, text="Content Rewards → TikTok", style="Muted.TLabel").pack(side="left", padx=10, pady=(10, 0))
+        self.pause_btn = ttk.Button(head, text="Pause", command=self._toggle_pause, style="Pink.TButton")
         self.pause_btn.pack(side="right")
 
-        nb = ttk.Notebook(self.root)
+        nb = ttk.Notebook(self.frame)
         nb.pack(fill="both", expand=True, padx=14, pady=8)
         self.nb = nb
-        for name, fn in (("Dashboard", self._tab_dash), ("Clips", self._tab_clips), ("Sources", self._tab_sources),
-                         ("Settings", self._tab_settings), ("Accounts & Phone", self._tab_accounts)):
+        for name, fn in (("DASHBOARD", self._tab_dash), ("CLIPS", self._tab_clips), ("SOURCES", self._tab_sources),
+                         ("SETTINGS", self._tab_settings), ("ACCOUNTS", self._tab_accounts)):
             f = ttk.Frame(nb)
             nb.add(f, text=name)
             fn(f)
@@ -125,7 +85,7 @@ class App:
         ttk.Button(btns, text="Retry failed videos", command=lambda: self._cmd("retry videos")).pack(side="left", padx=6)
         ttk.Button(btns, text="Open clips folder", command=lambda: open_path(self._outdir())).pack(side="left", padx=6)
         ttk.Label(f, text="Activity", style="Muted.TLabel").pack(anchor="w", padx=8)
-        self.logbox = tk.Text(f, bg=PANEL, fg=FG, insertbackground=FG, relief="flat", font=("Consolas", 10), wrap="word")
+        self.logbox = tk.Text(f, bg=PANEL, fg=FG, insertbackground=FG, relief="flat", font=(theme.MONO, 10), wrap="word")
         self.logbox.pack(fill="both", expand=True, padx=6, pady=(2, 6))
         self.logbox.tag_config("error", foreground="#FF6B6B")
         self.logbox.tag_config("warn", foreground=YEL)
@@ -144,7 +104,7 @@ class App:
         b = ttk.Frame(f)
         b.pack(fill="x", padx=6, pady=(0, 8))
         ttk.Button(b, text="Play", command=self._play).pack(side="left", padx=(0, 6))
-        ttk.Button(b, text="Post this now", command=self._post_sel, style="Accent.TButton").pack(side="left", padx=6)
+        ttk.Button(b, text="Post this now", command=self._post_sel, style="Pink.TButton").pack(side="left", padx=6)
         ttk.Button(b, text="Skip", command=lambda: self._sel_cmd("skip")).pack(side="left", padx=6)
         ttk.Button(b, text="Retry", command=lambda: self._sel_cmd("retry")).pack(side="left", padx=6)
         ttk.Button(b, text="Open TikTok link", command=self._open_link).pack(side="left", padx=6)
@@ -208,7 +168,7 @@ class App:
             self.src_vars[key] = v
         self.src_enabled = tk.BooleanVar(value=True)
         ttk.Checkbutton(right, text="Enabled", variable=self.src_enabled).pack(anchor="w", pady=8)
-        ttk.Button(right, text="Save source", command=self._save_src, style="Accent.TButton").pack(anchor="w")
+        ttk.Button(right, text="Save source", command=self._save_src, style="Pink.TButton").pack(anchor="w")
         ttk.Label(right, text="Only clip creators whose Content Rewards campaign you've joined; that's what gives you permission.",
                   style="Muted.TLabel").pack(anchor="w", pady=10)
         self._fill_src()
@@ -295,14 +255,15 @@ class App:
         sb = ttk.Scrollbar(f, orient="vertical", command=canvas.yview)
         inner = ttk.Frame(canvas)
         inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=inner, anchor="nw", width=1040)
+        win = canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(win, width=e.width))
         canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
         canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-e.delta / 120), "units"))
         self.set_vars = {}
         for section, fields in self.FIELDS:
-            tk.Label(inner, text=section, bg=BG, fg=RED, font=("Segoe UI Black", 13)).pack(anchor="w", pady=(14, 2), padx=8)
+            tk.Label(inner, text=section, bg=BG, fg=RED, font=(theme.DISPLAY, 12)).pack(anchor="w", pady=(14, 2), padx=8)
             for key, label, kind in fields:
                 row = ttk.Frame(inner)
                 row.pack(fill="x", padx=8, pady=3)
@@ -321,7 +282,7 @@ class App:
                 self.set_vars[key] = (v, kind)
         b = ttk.Frame(inner)
         b.pack(fill="x", padx=8, pady=16)
-        ttk.Button(b, text="Save settings", command=self._save_settings, style="Accent.TButton").pack(side="left")
+        ttk.Button(b, text="Save settings", command=self._save_settings, style="Pink.TButton").pack(side="left")
         ttk.Button(b, text="Edit all settings (settings.json)", command=lambda: open_path(self.agent.settings.path)).pack(side="left", padx=8)
         ttk.Button(b, text="Reload settings.json", command=self._reload).pack(side="left")
         ttk.Button(b, text="Open app source folder", command=lambda: open_path(os.path.join(os.path.dirname(sys.executable), "source") if getattr(sys, "frozen", False) else os.path.dirname(os.path.dirname(os.path.abspath(__file__))))).pack(side="left", padx=8)
@@ -370,42 +331,19 @@ class App:
     def _tab_accounts(self, f):
         c1 = ttk.Frame(f, style="Card.TFrame", padding=16)
         c1.pack(fill="x", padx=6, pady=10)
-        ttk.Label(c1, text="1. Sign in (once): easiest from the phone app → Accounts", style="Big.TLabel").pack(anchor="w")
-        ttk.Label(c1, text="Opens the agent's own Opera GX window (separate from your normal Opera profile) with TikTok and Content Rewards. Sign in to both, then close the window.\n"
-                           "Use the same TikTok account you linked on Content Rewards (@clipping_cartel_1).",
+        ttk.Label(c1, text="SIGN IN (ONCE)", style="Big.TLabel").pack(anchor="w")
+        ttk.Label(c1, text="TikTok: use the QR code (scan it with the TikTok app), or the phone app → Settings → Accounts.\n"
+                           "\"Open browser\" opens a normal browser window with this section's own profile: sign in to TikTok and "
+                           "Content Rewards, then close it.\nUse the TikTok account you linked on Content Rewards.",
                   style="Card.TLabel").pack(anchor="w", pady=6)
         bb = ttk.Frame(c1, style="Card.TFrame")
         bb.pack(anchor="w")
-        ttk.Button(bb, text="TikTok: sign in with QR code (scan with the TikTok app)", style="Accent.TButton",
+        ttk.Button(bb, text="TikTok: sign in with QR code (scan with the TikTok app)", style="Pink.TButton",
                    command=self._qr_login).pack(side="left")
         ttk.Button(bb, text="Open browser to sign in", command=self._login).pack(side="left", padx=8)
 
-        c2 = ttk.Frame(f, style="Card.TFrame", padding=16)
-        c2.pack(fill="x", padx=6, pady=10)
-        ttk.Label(c2, text="2. Connect your phone", style="Big.TLabel").pack(anchor="w")
-        n = self.agent.settings["ntfy"]
-        ttk.Label(c2, text="Install the Clip Cartel phone app, then enter this server and topic in its Connect screen:",
-                  style="Card.TLabel").pack(anchor="w", pady=6)
-        self.topic_var = tk.StringVar(value=n["topic"])
-        row = ttk.Frame(c2, style="Card.TFrame")
-        row.pack(anchor="w", fill="x")
-        tk.Label(row, text=n["server"] + "  ·  ", bg=PANEL, fg=MUTED, font=("Consolas", 13)).pack(side="left")
-        tk.Entry(row, textvariable=self.topic_var, bg="#202026", fg=YEL, relief="flat", font=("Consolas", 16), width=30,
-                 readonlybackground="#202026", state="readonly").pack(side="left")
-        ttk.Button(row, text="Copy", command=lambda: (self.root.clipboard_clear(), self.root.clipboard_append(n["topic"]))).pack(side="left", padx=8)
-        row2 = ttk.Frame(c2, style="Card.TFrame")
-        row2.pack(anchor="w", fill="x", pady=(8, 0))
-        tk.Label(row2, text="Pairing code (for signing in from your phone):  ", bg=PANEL, fg=MUTED, font=("Segoe UI", 11)).pack(side="left")
-        tk.Label(row2, text=n.get("pair_code", ""), bg=PANEL, fg=YEL, font=("Consolas", 18, "bold")).pack(side="left")
-        b = ttk.Frame(c2, style="Card.TFrame")
-        b.pack(anchor="w", pady=8)
-        ttk.Button(b, text="Send test notification", command=lambda: self.agent.ntfy.send("If you can read this, your phone is connected ✅",
-                                                                                          title="🤖 Test from Clip Cartel Agent", tags=["tada"])).pack(side="left")
-        ttk.Button(b, text="Get the phone app", command=lambda: webbrowser.open(APK_URL)).pack(side="left", padx=8)
-        ttk.Button(b, text="Download latest PC version", command=lambda: webbrowser.open(
-            "https://github.com/Neon-Forger/Clipping-Agent/releases/latest")).pack(side="left")
-        ttk.Label(c2, text="Anyone who knows the topic can read and control the agent, so keep it private.",
-                  style="Card.TLabel").pack(anchor="w")
+        ttk.Label(f, text="Your phone link (topic and pairing code) is on the PHONE page in the left menu.",
+                  style="Muted.TLabel").pack(anchor="w", padx=10, pady=6)
 
     def _login(self):
         if not self.agent.browser_lock.acquire(blocking=False):
@@ -414,7 +352,8 @@ class App:
 
         def go():
             try:
-                poster.open_for_login(self.agent.settings["posting"], ["https://www.tiktok.com/login", "https://contentrewards.com/c/home"])
+                poster.open_plain(self.agent.settings["posting"], ["https://www.tiktok.com/login", "https://contentrewards.com/c/home"],
+                                  log=self.agent.log)
                 self.agent.state.pop("signin_needed", None)
                 self.agent.save_state()
                 self.agent.log("info", "Sign-in window closed")
@@ -431,7 +370,7 @@ class App:
         top = tk.Toplevel(self.root, bg=BG)
         top.title("Sign in to TikTok")
         top.geometry("460x620")
-        tk.Label(top, text="Scan with the TikTok app", bg=BG, fg=FG, font=("Segoe UI Black", 16)).pack(pady=(16, 4))
+        tk.Label(top, text="Scan with the TikTok app", bg=BG, fg=FG, font=(theme.DISPLAY, 14)).pack(pady=(16, 4))
         tk.Label(top, text="On your phone open TikTok → Profile → ☰ menu (or Friends → scan icon) → scan this code,\n"
                            "then confirm the login on your phone.", bg=BG, fg=MUTED, justify="center", wraplength=420).pack(padx=10)
         img_lbl = tk.Label(top, bg="#ffffff", text="Loading the QR code...", width=40, height=16)
@@ -506,7 +445,7 @@ class App:
         ttk.Label(top, text="How many clips").pack(padx=14, pady=(10, 4), anchor="w")
         n = tk.StringVar(value="5")
         ttk.Entry(top, textvariable=n, width=6).pack(padx=14, anchor="w")
-        ttk.Button(top, text="Start", style="Accent.TButton",
+        ttk.Button(top, text="Start", style="Pink.TButton",
                    command=lambda: (self._cmd(f"clip {v.get().strip()} {n.get().strip()}"), top.destroy())).pack(padx=14, pady=14, anchor="w")
 
     def _toggle_pause(self):
@@ -543,13 +482,3 @@ class App:
         except Exception:
             pass
         self.root.after(5000, self._refresh)
-
-    def _on_close(self):
-        if messagebox.askyesno("Quit Clip Cartel Agent?", "Quit the agent? It will stop clipping and posting.\n\nChoose No to minimize it instead."):
-            self.agent.stop()
-            self.root.destroy()
-        else:
-            self.root.iconify()
-
-    def run(self):
-        self.root.mainloop()

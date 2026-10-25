@@ -45,27 +45,47 @@ def find_opera_gx():
     return None
 
 
-def _launch(p, posting_cfg, headless=None, log=None):
-    """Opens the agent's browser. Setting `posting.browser`: opera_gx (default), edge, chrome,
-    or a full path to a Chromium-based browser .exe. Each browser keeps its own agent profile."""
+def _exe_for_channel(ch):
+    pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+    pf86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    la = os.environ.get("LOCALAPPDATA", "")
+    cands = {"msedge": [os.path.join(pf86, r"Microsoft\Edge\Application\msedge.exe"), os.path.join(pf, r"Microsoft\Edge\Application\msedge.exe")],
+             "chrome": [os.path.join(pf, r"Google\Chrome\Application\chrome.exe"), os.path.join(pf86, r"Google\Chrome\Application\chrome.exe"),
+                        os.path.join(la, r"Google\Chrome\Application\chrome.exe")]}.get(ch, [])
+    for c in cands:
+        if os.path.isfile(c):
+            return c
+    return None
+
+
+def browser_targets(posting_cfg, prefix="browser-profile"):
+    """Browsers to try, in order: (display name, launch kwargs for Playwright, plain .exe path or None).
+    `prefix` keeps separate sign-ins per section (clipping vs YouTube)."""
     want = (posting_cfg.get("browser") or "opera_gx").strip()
+    out = []
+    if want.lower() in ("opera_gx", "opera", "operagx"):
+        exe = find_opera_gx()
+        if exe:
+            out.append(("Opera GX", dict(executable_path=exe, user_data_dir=profile_dir(prefix + "-operagx")), exe))
+    elif want.lower().endswith(".exe"):
+        out.append((os.path.basename(want), dict(executable_path=want, user_data_dir=profile_dir(prefix + "-custom")), want))
+    elif want.lower() == "chrome":
+        out.append(("Chrome", dict(channel="chrome", user_data_dir=profile_dir(prefix + "-chrome")), _exe_for_channel("chrome")))
+    out += [("Edge", dict(channel="msedge", user_data_dir=profile_dir(prefix if prefix != "browser-profile" else "browser-profile")), _exe_for_channel("msedge")),
+            ("Chrome", dict(channel="chrome", user_data_dir=profile_dir(prefix + "-chrome")), _exe_for_channel("chrome"))]
+    return out
+
+
+def _launch(p, posting_cfg, headless=None, log=None, prefix="browser-profile"):
+    """Opens the agent's browser for automation. Setting `posting.browser`: opera_gx (default), edge,
+    chrome, or a full path to a Chromium-based browser .exe."""
     base = dict(headless=posting_cfg.get("headless", False) if headless is None else headless,
                 viewport={"width": 1366, "height": 900},
                 user_agent=posting_cfg.get("user_agent") or None,
                 args=["--disable-blink-features=AutomationControlled", "--mute-audio"])
-    attempts = []
-    if want.lower() in ("opera_gx", "opera", "operagx"):
-        exe = find_opera_gx()
-        if exe:
-            attempts.append(("Opera GX", dict(executable_path=exe, user_data_dir=profile_dir("browser-profile-operagx"))))
-    elif want.lower().endswith(".exe"):
-        attempts.append((os.path.basename(want), dict(executable_path=want, user_data_dir=profile_dir("browser-profile-custom"))))
-    elif want.lower() == "chrome":
-        attempts.append(("Chrome", dict(channel="chrome", user_data_dir=profile_dir("browser-profile-chrome"))))
-    attempts += [("Edge", dict(channel="msedge", user_data_dir=profile_dir())),
-                 ("Chrome", dict(channel="chrome", user_data_dir=profile_dir("browser-profile-chrome")))]
+    attempts = browser_targets(posting_cfg, prefix)
     errors = []
-    for name, kw in attempts:
+    for name, kw, _exe in attempts:
         try:
             ctx = p.chromium.launch_persistent_context(**kw, **base)
             if errors and log:
@@ -76,16 +96,43 @@ def _launch(p, posting_cfg, headless=None, log=None):
     raise RuntimeError("Couldn't open any browser: " + " | ".join(errors))
 
 
+def open_plain(posting_cfg, urls, prefix="browser-profile", max_minutes=30, log=None):
+    """Opens the agent's browser profile as a NORMAL browser window (not remote-controlled), so sites
+    like Google allow signing in. Returns when you close the window. Falls back to the controlled
+    browser if no browser .exe is found."""
+    import subprocess
+    for name, kw, exe in browser_targets(posting_cfg, prefix):
+        if not exe or not os.path.isfile(exe):
+            continue
+        cmd = [exe, f"--user-data-dir={kw['user_data_dir']}", "--no-first-run", "--no-default-browser-check", "--new-window"] + list(urls)
+        try:
+            proc = subprocess.Popen(cmd)
+        except Exception as e:
+            if log:
+                log("warn", f"Couldn't start {name}: {e}")
+            continue
+        if log:
+            log("info", f"Opened {name}. Sign in, then close that window.")
+        try:
+            proc.wait(timeout=max_minutes * 60)
+        except Exception:
+            proc.kill()
+        time.sleep(2)
+        return name
+    open_for_login(posting_cfg, urls, max_minutes=max_minutes, prefix=prefix)
+    return "automation browser"
+
+
 def _human_pause(a=0.6, b=1.6):
     time.sleep(random.uniform(a, b))
 
 
-def open_for_login(posting_cfg, urls, max_minutes=20):
+def open_for_login(posting_cfg, urls, max_minutes=20, prefix="browser-profile"):
     """Opens the agent's browser so you can sign in. Returns when you close the window
     (or after `max_minutes`, so the browser is never blocked forever)."""
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
-        ctx = _launch(p, posting_cfg, headless=False)
+        ctx = _launch(p, posting_cfg, headless=False, prefix=prefix)
         closed = {"v": False}
         ctx.on("close", lambda *_: closed.update(v=True))
         page = ctx.pages[0] if ctx.pages else ctx.new_page()

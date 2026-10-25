@@ -120,7 +120,7 @@ class Agent:
                          name="ntfy").start()
         threading.Thread(target=self._heartbeat, daemon=True, name="heartbeat").start()
         threading.Thread(target=self._check_update, daemon=True, name="update").start()
-        self.log("info", "Agent started", notify=True, title="🤖 Clip Cartel Agent online", tags=["robot"])
+        self.log("info", "NeonClip started", notify=True, title="🤖 NeonClip online", tags=["robot"])
         self.push_state()
 
     def stop(self):
@@ -166,6 +166,8 @@ class Agent:
     def _heartbeat(self):
         while not self._stop.wait(1800):
             self.push_state()
+            if getattr(self, "yt", None):
+                self.yt.push_state()
 
     # ---------------------------------------------------------------- producer
     def _producer_loop(self):
@@ -412,6 +414,12 @@ class Agent:
 
     # ---------------------------------------------------------------- commands
     def handle_command(self, text):
+        yt = getattr(self, "yt", None)
+        if yt and text.lower().startswith(("yt ", "youtube ")):
+            yt.handle_command(text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else "status")
+            return
+        if yt and text.strip().lower() == "state":
+            yt.push_state()
         shown = "login (sign-in from phone)" if text.lower().startswith("login ") else (text if len(text) < 120 else text[:117] + "...")
         if text.lower().startswith("set ") and any(k in text for k in ("api_key", "token", "pair_code")):
             shown = text.split(" ")[0] + " " + text.split(" ")[1] + " (hidden)"
@@ -609,7 +617,7 @@ class Agent:
     def _ask_ai(self, question):
         ctx = {"status": self.status(), "recent_log": [e["text"] for e in self.db.events(25)],
                "settings": self.settings.masked()}
-        return ai.ask(self.settings["ai"], "You are the assistant inside 'Clip Cartel Agent', an app that clips long videos into "
+        return ai.ask(self.settings["ai"], "You are the assistant inside 'NeonClip', an app whose Clipping section clips long videos into "
                       "TikToks, posts them and submits them to Content Rewards. Answer the owner briefly (max 5 sentences).\n"
                       f"Agent info: {json.dumps(ctx)[:12000]}\n\nQuestion: {question}")
 

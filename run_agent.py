@@ -1,5 +1,5 @@
-# Entry point used to build ClipCartelAgent.exe
-from agent.main import main
+# Entry point used to build NeonClip.exe
+from neonclip.main import main
 
 if __name__ == "__main__":
     main()

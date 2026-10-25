@@ -1,3 +1,3 @@
-from .main import main
+from neonclip.main import main
 
 main()

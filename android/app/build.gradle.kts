@@ -10,11 +10,11 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.neonforger.clipcartel"
+        applicationId = "com.neonforger.neonclip"
         minSdk = 26
         targetSdk = 34
         versionCode = ver
-        versionName = "1.0.$ver"
+        versionName = "2.0.$ver"
     }
 
     signingConfigs {

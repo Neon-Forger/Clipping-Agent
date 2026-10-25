@@ -1,34 +1,42 @@
-# Clip Cartel Agent
+# NeonClip
 
-An app for your Windows PC that runs [Content Rewards](https://contentrewards.com) clipping on its own:
+A Windows app with **two completely separate sections** and an Android phone app that watches and controls both.
+Each section has its own settings, database, AI keys and browser sign-ins.
 
-1. **Finds videos.** It watches the YouTube channels (or specific videos) you pick in **Sources**.
-2. **Picks the best moments.** It transcribes on your PC with word-level timing and asks your AI (Gemini, OpenRouter or any OpenAI-compatible API) for the most viral 30–60 second moments, with hook titles and captions.
-3. **Edits.** It renders vertical 1080×1920 clips: blurred background, slow zoom, word-by-word captions with highlighted words, and a hook title. In *dramatic* style the punchline also gets a flash, punch-in zoom, shake and impact sound. There's a progress bar too.
-4. **Posts to TikTok.** It uses its own Microsoft Edge window, spaced out and never during quiet hours.
-5. **Submits the link to Content Rewards** within the 30-minute window and checks it shows up in Submissions.
-6. **Keeps your phone updated** over [ntfy](https://ntfy.sh). Use the **Clip Cartel** Android app to see progress, pause/resume, post now, change any setting, or type instructions in plain English.
+## ✂ Clipping (Content Rewards → TikTok)
+1. Watches the YouTube channels or videos of campaigns you've joined.
+2. Transcribes with word-level timing and asks your AI (Gemini, OpenRouter or any OpenAI-compatible API) for the most viral 30–60 s moments.
+3. Edits vertical clips: zooms, word-by-word captions, hook title, and a flash + impact sound on the punchline.
+4. Posts to TikTok, then submits the link to Content Rewards within its 30-minute window.
 
-## Install (Windows)
-1. Download **ClipCartelAgent-Windows.zip** from [Releases](../../releases/latest), unzip it somewhere permanent (e.g. `Documents\ClipCartelAgent`).
-2. Open `ClipCartelAgent.exe`. If Windows SmartScreen appears, click *More info → Run anyway*.
-3. **Settings tab:** paste your Gemini and/or OpenRouter API key, then click Save.
-4. **Accounts & Phone tab:** click *Sign in to TikTok + Content Rewards*, sign in to both in the window that opens, then close it.
-5. **Sources tab:** check the channel and campaign link.
-6. Install **ClipCartel.apk** on your phone and enter the topic shown in *Accounts & Phone*.
+## ▶ YouTube automation
+1. **Setup:** sign in with Google in a normal browser window, then pick an existing channel or create a new one. NeonClip can also make a neon profile picture and banner.
+2. **Every day at your chosen time** (while the PC is on) it makes your long videos and Shorts for the genre you pick:
+   - **Original:** the AI writes the script, a neural voice narrates it (Microsoft Edge voices, free), and it adds stock footage (Pexels, free key) or AI images, captions, chapters and an AI title, description and tags.
+   - **Repurposed:** highlight/commentary edits of videos you're **allowed** to reuse: your own uploads, creators who gave permission, or videos YouTube marks **Creative Commons** (credited automatically).
+3. **Thumbnails:** a neon style, made from the video or an AI image.
+4. **Uploads** through YouTube Studio at your upload times (public, unlisted or private), with "made for kids" and altered-content answers set.
 
-The first transcription downloads a speech model (~500 MB) once.
+> NeonClip deliberately has no "ignore copyright" switch. Re-uploading other people's videos without permission gets copyright strikes (three strikes deletes the channel) and fails YouTube's reused-content monetization rules.
 
-## Phone commands
-`status` `pause` `resume` `run` `post` `list` `skip <id>` `retry <id>` `clip <url> [n]`
-`set <setting> <value>` `get <setting>` `settings` `prompt <text>` `sources` `ask <question>`
-Anything else is turned into commands by the AI, e.g. *"only post 3 a day and skip anything political"*.
+## 📱 Phone app
+- Live status of both sections, plus activity and notifications.
+- Pause or resume, make or upload now, post now, clip a link.
+- Edit any setting, or type instructions in plain English.
+- Sign in to TikTok and Content Rewards from the phone. Sign-ins are encrypted with your pairing code.
+
+## Install
+1. Download **NeonClip-Windows.zip** from [Releases](../../releases/latest), unzip it somewhere permanent, and open `NeonClip.exe`. If SmartScreen appears, choose *More info → Run anyway*.
+2. **YOUTUBE → CHANNEL:** follow steps 1–4.
+3. **CLIPPING → SETTINGS / ACCOUNTS:** add your AI key and sign in.
+4. **PHONE:** install **NeonClip.apk** and enter the topic and pairing code.
 
 ## Editing the app
-The full source is in the `source` folder next to the .exe (and in this repo). Edit it and start it with `run_from_source.bat` (needs Python 3.11+). Every setting is also in `%LOCALAPPDATA%\ClipCartelAgent\settings.json`. If TikTok or Content Rewards change their pages, the page selectors are under `selectors` in that file.
+The source is in the `source` folder next to the .exe. Run it with `run_from_source.bat` (needs Python 3.11+).
+Settings live in `%LOCALAPPDATA%\ClipCartelAgent\`: `settings.json` (Clipping) and `youtube.json` (YouTube).
+Page selectors for TikTok, Content Rewards and YouTube Studio are editable there in case those sites change.
 
 ## Important
-* Automated posting is against TikTok's terms; accounts that post like bots can be limited or banned. Keep the volume human-like (the defaults: ≥3 h apart, ≤5/day, nothing 00:00–05:00).
-* Only clip creators whose Content Rewards campaign you've joined. That's what gives you permission to use their footage. Read each campaign's rules (required hashtags, which episodes are allowed).
-* Content Rewards only accepts links submitted within 30 minutes of posting, so keep the agent running while it posts.
-* Anyone who knows your ntfy topic can read and control the agent. Keep it private.
+- Automated posting can break platform rules (TikTok especially). Keep posting volume human-like.
+- Custom YouTube thumbnails need a phone-verified channel.
+- Anyone who knows your ntfy topic can control NeonClip, so keep it private.

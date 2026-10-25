@@ -1,0 +1,3 @@
+Poppins is licensed under the SIL Open Font License 1.1 (https://openfontlicense.org). Copyright 2020 The Poppins Project Authors.
+
+Orbitron (Copyright The Orbitron Project Authors) and Share Tech Mono (Copyright Carrois Type Design) are licensed under the SIL Open Font License 1.1.

@@ -53,7 +53,7 @@ class LoginActivity : Activity() {
 
         val root = LinearLayout(this)
         root.orientation = LinearLayout.VERTICAL
-        root.setBackgroundColor(Color.parseColor("#0B0B0C"))
+        root.setBackgroundColor(Color.parseColor("#040915"))
 
         val bar = LinearLayout(this)
         bar.orientation = LinearLayout.HORIZONTAL
@@ -66,7 +66,7 @@ class LoginActivity : Activity() {
         bar.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         val send = Button(this)
         send.text = "Done · send to PC"
-        send.setBackgroundColor(Color.parseColor("#E5252A"))
+        send.setBackgroundColor(Color.parseColor("#FF2BD6"))
         send.setTextColor(Color.WHITE)
         send.setOnClickListener { sendToPc(site) }
         bar.addView(send)
@@ -79,7 +79,7 @@ class LoginActivity : Activity() {
         else
             "Sign in below (pinch to zoom). When you see your account, tap “Done · send to PC”. " +
                     "Use email + a code if you can; “Continue with Google” is often blocked inside apps."
-        hint.setTextColor(Color.parseColor("#9A9AA5"))
+        hint.setTextColor(Color.parseColor("#8AA0C4"))
         hint.textSize = 12f
         hint.setPadding(24, 0, 24, 12)
         root.addView(hint)

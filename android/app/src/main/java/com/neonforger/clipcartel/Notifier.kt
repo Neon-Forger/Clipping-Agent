@@ -15,7 +15,7 @@ object Notifier {
         val nm = ctx.getSystemService(NotificationManager::class.java)
         if (nm.getNotificationChannel(CHANNEL) == null) {
             val ch = NotificationChannel(CHANNEL, "Agent updates", NotificationManager.IMPORTANCE_DEFAULT)
-            ch.description = "What your Clip Cartel agent is doing"
+            ch.description = "What NeonClip is doing on your PC"
             nm.createNotificationChannel(ch)
         }
     }

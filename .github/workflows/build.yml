@@ -28,11 +28,11 @@ jobs:
           KEY_ALIAS: clipcartel
           KEY_PASSWORD: clipcartel
         run: gradle -p android assembleRelease --no-daemon --stacktrace
-      - run: cp android/app/build/outputs/apk/release/app-release.apk ClipCartel.apk
+      - run: cp android/app/build/outputs/apk/release/app-release.apk NeonClip.apk
       - uses: actions/upload-artifact@v4
         with:
           name: apk
-          path: ClipCartel.apk
+          path: NeonClip.apk
 
   windows:
     runs-on: windows-latest
@@ -46,34 +46,34 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
       - name: Run from source self-test
-        run: python -m agent --selftest
+        run: python -m neonclip.main --selftest
       - name: Stamp build number
         run: echo "BUILD = ${{ github.run_number }}" > agent/_build.py
       - name: Package
         run: >
-          pyinstaller --noconfirm --windowed --name ClipCartelAgent --icon assets/icon.ico
+          pyinstaller --noconfirm --windowed --name NeonClip --icon assets/icon.ico
           --add-data "assets;assets"
           --collect-all faster_whisper --collect-all ctranslate2 --collect-all playwright
-          --collect-all imageio_ffmpeg --collect-all yt_dlp --collect-all av
+          --collect-all imageio_ffmpeg --collect-all yt_dlp --collect-all av --collect-all edge_tts --collect-all certifi
           --hidden-import tkinter run_agent.py
       - name: Add editable source code
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist/ClipCartelAgent/source | Out-Null
-          Copy-Item -Recurse agent, assets, run_agent.py, requirements.txt, README.md dist/ClipCartelAgent/source/
-          Copy-Item scripts/*.bat dist/ClipCartelAgent/source/
+          New-Item -ItemType Directory -Force dist/NeonClip/source | Out-Null
+          Copy-Item -Recurse agent, ytauto, neonclip, assets, run_agent.py, requirements.txt, README.md dist/NeonClip/source/
+          Copy-Item scripts/*.bat dist/NeonClip/source/
       - name: Packaged self-test
         shell: pwsh
         run: |
-          $p = Start-Process dist/ClipCartelAgent/ClipCartelAgent.exe -ArgumentList "--selftest" -Wait -PassThru
+          $p = Start-Process dist/NeonClip/NeonClip.exe -ArgumentList "--selftest" -Wait -PassThru
           if ($p.ExitCode -ne 0) { exit 1 }
       - name: Zip
         shell: pwsh
-        run: Compress-Archive -Path dist/ClipCartelAgent -DestinationPath ClipCartelAgent-Windows.zip
+        run: Compress-Archive -Path dist/NeonClip -DestinationPath NeonClip-Windows.zip
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: ClipCartelAgent-Windows.zip
+          path: NeonClip-Windows.zip
 
   release:
     needs: [android, windows]
@@ -84,12 +84,12 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: Clip Cartel v1.0.${{ github.run_number }}
+          tag_name: v2.0.${{ github.run_number }}
+          name: NeonClip v2.0.${{ github.run_number }}
           make_latest: true
           body: |
-            **ClipCartelAgent-Windows.zip**: the PC agent. Unzip anywhere, open `ClipCartelAgent.exe`.
-            **ClipCartel.apk**: the phone app (Android). Install it, then enter the topic shown in the PC app.
+            **NeonClip-Windows.zip**: the PC app (Clipping + YouTube sections). Unzip anywhere, open `NeonClip.exe`.
+            **NeonClip.apk**: the phone app (Android). Install it, then enter the topic and pairing code from NeonClip → PHONE.
           files: |
-            ClipCartel.apk
-            ClipCartelAgent-Windows.zip
+            NeonClip.apk
+            NeonClip-Windows.zip

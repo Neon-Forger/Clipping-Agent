@@ -127,9 +127,10 @@ def _merge(base, extra):
 
 
 class Settings:
-    def __init__(self, path=None):
+    def __init__(self, path=None, defaults=None):
+        self.defaults = defaults if defaults is not None else DEFAULTS
         self.path = path or os.path.join(data_dir(), "settings.json")
-        self.data = copy.deepcopy(DEFAULTS)
+        self.data = copy.deepcopy(self.defaults)
         self.load()
 
     def load(self):
@@ -137,16 +138,23 @@ class Settings:
             if os.path.exists(self.path):
                 try:
                     with open(self.path, "r", encoding="utf-8") as f:
-                        self.data = _merge(DEFAULTS, json.load(f))
+                        self.data = _merge(self.defaults, json.load(f))
                 except Exception:
                     pass
-            changed = False
+            if self.after_load():
+                self.save()
+
+    def after_load(self):
+        """Fix-ups after loading; returns True if something changed and should be saved."""
+        changed = False
+        if "ai" in self.data:
             if self.data["ai"].get("gemini_model") in ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"):
                 self.data["ai"]["gemini_model"] = "auto"
                 changed = True
             if self.data["ai"].get("openrouter_model") == "google/gemini-2.5-flash":
                 self.data["ai"]["openrouter_model"] = "openrouter/auto"
                 changed = True
+        if "ntfy" in self.data:
             if not self.data["ntfy"].get("topic"):
                 self.data["ntfy"]["topic"] = "clipcartel-" + secrets.token_hex(6)
                 changed = True
@@ -155,8 +163,7 @@ class Settings:
                 code = "".join(secrets.choice(alphabet) for _ in range(8))
                 self.data["ntfy"]["pair_code"] = code[:4] + "-" + code[4:]
                 changed = True
-            if changed:
-                self.save()
+        return changed
 
     def save(self):
         with _lock:
@@ -209,7 +216,7 @@ class Settings:
     def replace_all(self, new_data):
         with _lock:
             # keep secrets the phone never saw (they arrive masked)
-            merged = _merge(DEFAULTS, new_data)
+            merged = _merge(self.defaults, new_data)
             _restore_secrets(merged, self.data)
             self.data = merged
             self.save()
