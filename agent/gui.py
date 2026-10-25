@@ -372,7 +372,11 @@ class App:
         ttk.Label(c1, text="Opens the agent's own Opera GX window (separate from your normal Opera profile) with TikTok and Content Rewards. Sign in to both, then close the window.\n"
                            "Use the same TikTok account you linked on Content Rewards (@clipping_cartel_1).",
                   style="Card.TLabel").pack(anchor="w", pady=6)
-        ttk.Button(c1, text="Sign in to TikTok + Content Rewards", style="Accent.TButton", command=self._login).pack(anchor="w")
+        bb = ttk.Frame(c1, style="Card.TFrame")
+        bb.pack(anchor="w")
+        ttk.Button(bb, text="TikTok: sign in with QR code (scan with the TikTok app)", style="Accent.TButton",
+                   command=self._qr_login).pack(side="left")
+        ttk.Button(bb, text="Open browser to sign in", command=self._login).pack(side="left", padx=8)
 
         c2 = ttk.Frame(f, style="Card.TFrame", padding=16)
         c2.pack(fill="x", padx=6, pady=10)
@@ -416,6 +420,65 @@ class App:
                 self.agent.log("error", f"Couldn't open the browser: {e}. Check the browser setting in Settings → Posting.")
             finally:
                 self.agent.browser_lock.release()
+        threading.Thread(target=go, daemon=True).start()
+
+    def _qr_login(self):
+        if not self.agent.browser_lock.acquire(blocking=False):
+            messagebox.showwarning("Busy", "The agent is using the browser right now (posting). Try again in a few minutes.")
+            return
+        top = tk.Toplevel(self.root, bg=BG)
+        top.title("Sign in to TikTok")
+        top.geometry("460x620")
+        tk.Label(top, text="Scan with the TikTok app", bg=BG, fg=FG, font=("Segoe UI Black", 16)).pack(pady=(16, 4))
+        tk.Label(top, text="On your phone open TikTok → Profile → ☰ menu (or Friends → scan icon) → scan this code,\n"
+                           "then confirm the login on your phone.", bg=BG, fg=MUTED, justify="center", wraplength=420).pack(padx=10)
+        img_lbl = tk.Label(top, bg="#ffffff", text="Loading the QR code...", width=40, height=16)
+        img_lbl.pack(pady=14)
+        status = tk.Label(top, text="Opening TikTok...", bg=BG, fg=YEL)
+        status.pack()
+        stop = {"v": False}
+        ttk.Button(top, text="Cancel", command=lambda: (stop.update(v=True), top.destroy())).pack(pady=10)
+        top.protocol("WM_DELETE_WINDOW", lambda: (stop.update(v=True), top.destroy()))
+
+        def show(png):
+            def ui():
+                if stop["v"]:
+                    return
+                try:
+                    import base64
+                    ph = tk.PhotoImage(data=base64.b64encode(png).decode())
+                    while ph.width() > 420 or ph.height() > 420:
+                        ph = ph.subsample(2, 2)
+                    img_lbl.config(image=ph, text="", width=ph.width(), height=ph.height())
+                    img_lbl.image = ph
+                    status.config(text="Waiting for you to scan... (the code refreshes itself)")
+                except Exception as e:
+                    status.config(text=f"Couldn't show the code: {e}")
+            self.root.after(0, ui)
+
+        def go():
+            ok = False
+            try:
+                ok = poster.tiktok_qr_login(self.agent.settings["posting"], show, lambda: stop["v"], self.agent.log)
+            except Exception as e:
+                self.agent.log("error", f"QR sign-in failed: {e}")
+            finally:
+                self.agent.browser_lock.release()
+            if ok:
+                self.agent.state.pop("signin_needed", None)
+                self.agent.save_state()
+                self.agent.log("info", "✅ TikTok signed in (QR code)", notify=True, title="✅ TikTok sign-in")
+
+            def done():
+                if ok:
+                    messagebox.showinfo("Signed in", "TikTok is signed in. ✅")
+                elif not stop["v"]:
+                    messagebox.showwarning("Not signed in", "The QR code timed out or TikTok didn't confirm. Try again.")
+                try:
+                    top.destroy()
+                except Exception:
+                    pass
+            self.root.after(0, done)
         threading.Thread(target=go, daemon=True).start()
 
     # ------------------------------------------------------------- helpers

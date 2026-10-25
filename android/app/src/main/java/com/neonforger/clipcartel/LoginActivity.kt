@@ -73,8 +73,12 @@ class LoginActivity : Activity() {
         root.addView(bar)
 
         val hint = TextView(this)
-        hint.text = "Sign in below (pinch to zoom). When you see your account, tap “Done · send to PC”. " +
-                "Use email/phone + password or a code; “Continue with Google” may be blocked inside apps."
+        hint.text = if (service == "tiktok")
+            "No password? Tap “Use phone / email / username” → Phone → “Log in with code”, or use the QR code button in the PC app. " +
+                    "When you see your account, tap “Done · send to PC”."
+        else
+            "Sign in below (pinch to zoom). When you see your account, tap “Done · send to PC”. " +
+                    "Use email + a code if you can; “Continue with Google” is often blocked inside apps."
         hint.setTextColor(Color.parseColor("#9A9AA5"))
         hint.textSize = 12f
         hint.setPadding(24, 0, 24, 12)

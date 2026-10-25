@@ -106,6 +106,57 @@ def open_for_login(posting_cfg, urls, max_minutes=20):
             pass
 
 
+def tiktok_qr_login(posting_cfg, on_qr, should_stop, log=None, max_minutes=5):
+    """Signs in to TikTok by QR code: the agent opens TikTok's QR login page out of sight,
+    hands screenshots of the QR to `on_qr(png_bytes)`, and you scan it with the TikTok app
+    (Profile -> ☰ or the scan icon). Returns True once TikTok is signed in."""
+    from playwright.sync_api import sync_playwright
+    cfg = dict(posting_cfg)
+    cfg["headless"] = False
+    with sync_playwright() as p:
+        ctx = _launch(p, cfg, headless=False, log=log)
+        try:
+            page = ctx.pages[0] if ctx.pages else ctx.new_page()
+            try:
+                page.evaluate("() => { window.moveTo(-3000, -3000); }")
+            except Exception:
+                pass
+            page.goto("https://www.tiktok.com/login/qrcode", wait_until="domcontentloaded", timeout=60000)
+            end = time.time() + max_minutes * 60
+            last_shot = 0
+            while time.time() < end and not should_stop():
+                if any(c["name"] == "sessionid" and c["value"] for c in ctx.cookies("https://www.tiktok.com")):
+                    time.sleep(3)
+                    return True
+                if time.time() - last_shot > 4:
+                    last_shot = time.time()
+                    shot = None
+                    for sel in ("canvas", "img[src*='qr' i]", "[data-e2e*='qr' i] img", "[class*='qrcode' i] img",
+                                "[class*='QRcode' i] img", "[class*='qr' i] canvas"):
+                        loc = page.locator(sel)
+                        for i in range(min(loc.count(), 5)):
+                            el = loc.nth(i)
+                            try:
+                                box = el.bounding_box()
+                                if el.is_visible() and box and box["width"] >= 100 and box["height"] >= 100:
+                                    shot = el.screenshot()
+                                    break
+                            except Exception:
+                                continue
+                        if shot:
+                            break
+                    if not shot:
+                        shot = page.screenshot()
+                    on_qr(shot)
+                time.sleep(1)
+            return False
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+
+
 COOKIE_DOMAINS = {
     "tiktok": [".tiktok.com"],
     "contentrewards": [".contentrewards.com"],
