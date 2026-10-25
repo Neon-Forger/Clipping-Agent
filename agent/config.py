@@ -78,7 +78,7 @@ DEFAULTS = {
         "max_posts_per_day": 5,
         "quiet_hours_start": 0,       # no posting from 00:00 ...
         "quiet_hours_end": 5,         # ... until 05:00 (local time)
-        "browser_channel": "msedge",  # uses Microsoft Edge that's already on Windows
+        "browser": "opera_gx",        # opera_gx | edge | chrome | full path to a Chromium-based browser .exe
         "headless": False,
         "submit_to_content_rewards": True,
         "submit_within_minutes": 25,  # Content Rewards only accepts links < 30 min old

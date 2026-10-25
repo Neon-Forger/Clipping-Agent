@@ -1,5 +1,5 @@
 """Browser automation for TikTok posting and Content Rewards submission.
-Uses a separate, persistent Microsoft Edge profile owned by the agent: you sign in
+Uses its own persistent browser profile (Opera GX by default): you sign in
 to TikTok and Content Rewards once (Accounts tab -> "Sign in"), and it stays signed in.
 
 Warning: automated posting is against TikTok's terms and can get an account
@@ -16,27 +16,63 @@ class NotLoggedIn(Exception):
     pass
 
 
-def profile_dir():
-    d = os.path.join(data_dir(), "browser-profile")
+def profile_dir(name="browser-profile"):
+    d = os.path.join(data_dir(), name)
     os.makedirs(d, exist_ok=True)
     return d
 
 
-def _launch(p, posting_cfg, headless=None):
-    channel = posting_cfg.get("browser_channel") or None
-    kw = dict(user_data_dir=profile_dir(), headless=posting_cfg.get("headless", False) if headless is None else headless,
-              viewport={"width": 1366, "height": 900},
-              args=["--disable-blink-features=AutomationControlled", "--mute-audio"])
-    try:
-        return p.chromium.launch_persistent_context(channel=channel, **kw)
-    except Exception:
-        # Edge not found: fall back to Chrome, then to Playwright's own Chromium
-        for ch in ("chrome", None):
-            try:
-                return p.chromium.launch_persistent_context(channel=ch, **kw) if ch else p.chromium.launch_persistent_context(**kw)
-            except Exception:
-                continue
-        raise
+def find_opera_gx():
+    """Path to Opera GX's real browser exe (the versioned one, not the launcher)."""
+    roots = [os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Opera GX"),
+             os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Opera GX"),
+             os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Opera GX")]
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        versions = []
+        for d in os.listdir(root):
+            exe = os.path.join(root, d, "opera.exe")
+            if os.path.isfile(exe) and d[:1].isdigit():
+                try:
+                    versions.append((tuple(int(x) for x in d.split(".")), exe))
+                except ValueError:
+                    pass
+        if versions:
+            return max(versions)[1]
+        if os.path.isfile(os.path.join(root, "opera.exe")):
+            return os.path.join(root, "opera.exe")
+    return None
+
+
+def _launch(p, posting_cfg, headless=None, log=None):
+    """Opens the agent's browser. Setting `posting.browser`: opera_gx (default), edge, chrome,
+    or a full path to a Chromium-based browser .exe. Each browser keeps its own agent profile."""
+    want = (posting_cfg.get("browser") or "opera_gx").strip()
+    base = dict(headless=posting_cfg.get("headless", False) if headless is None else headless,
+                viewport={"width": 1366, "height": 900},
+                args=["--disable-blink-features=AutomationControlled", "--mute-audio"])
+    attempts = []
+    if want.lower() in ("opera_gx", "opera", "operagx"):
+        exe = find_opera_gx()
+        if exe:
+            attempts.append(("Opera GX", dict(executable_path=exe, user_data_dir=profile_dir("browser-profile-operagx"))))
+    elif want.lower().endswith(".exe"):
+        attempts.append((os.path.basename(want), dict(executable_path=want, user_data_dir=profile_dir("browser-profile-custom"))))
+    elif want.lower() == "chrome":
+        attempts.append(("Chrome", dict(channel="chrome", user_data_dir=profile_dir("browser-profile-chrome"))))
+    attempts += [("Edge", dict(channel="msedge", user_data_dir=profile_dir())),
+                 ("Chrome", dict(channel="chrome", user_data_dir=profile_dir("browser-profile-chrome")))]
+    errors = []
+    for name, kw in attempts:
+        try:
+            ctx = p.chromium.launch_persistent_context(**kw, **base)
+            if errors and log:
+                log("warn", f"Couldn't open {attempts[0][0]} ({errors[0]}); using {name} instead.")
+            return ctx
+        except Exception as e:
+            errors.append(str(e).splitlines()[0][:200])
+    raise RuntimeError("Couldn't open any browser: " + " | ".join(errors))
 
 
 def _human_pause(a=0.6, b=1.6):
@@ -78,7 +114,7 @@ def post_to_tiktok(video_path, caption, posting_cfg, sel, log):
     """Uploads and posts a video. Returns the new video's URL."""
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
-        ctx = _launch(p, posting_cfg)
+        ctx = _launch(p, posting_cfg, log=log)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.set_default_timeout(60000)
         try:
@@ -177,7 +213,7 @@ def submit_to_content_rewards(campaign_url, tiktok_url, posting_cfg, sel, log):
     from playwright.sync_api import sync_playwright
     vid = tiktok_url.rstrip("/").split("/")[-1]
     with sync_playwright() as p:
-        ctx = _launch(p, posting_cfg)
+        ctx = _launch(p, posting_cfg, log=log)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.set_default_timeout(45000)
         try:

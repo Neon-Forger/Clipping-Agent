@@ -282,6 +282,7 @@ class App:
                      ("posting.max_posts_per_day", "Max posts per day", "int"),
                      ("posting.quiet_hours_start", "No posting from (hour 0-23)", "int"),
                      ("posting.quiet_hours_end", "...until (hour 0-23)", "int"),
+                     ("posting.browser", "Browser for sign-in & posting (opera_gx / edge / chrome / path to .exe)", ""),
                      ("posting.headless", "Hide the browser while posting", "bool"),
                      ("check_sources_every_minutes", "Check for new videos every (minutes)", "int"),
                      ("start_with_windows", "Start with Windows", "bool"), ("keep_pc_awake", "Keep the PC awake", "bool")]),
@@ -368,7 +369,7 @@ class App:
         c1 = ttk.Frame(f, style="Card.TFrame", padding=16)
         c1.pack(fill="x", padx=6, pady=10)
         ttk.Label(c1, text="1. Sign in (once)", style="Big.TLabel").pack(anchor="w")
-        ttk.Label(c1, text="Opens the agent's own Edge window with TikTok and Content Rewards. Sign in to both, then close the window.\n"
+        ttk.Label(c1, text="Opens the agent's own Opera GX window (separate from your normal Opera profile) with TikTok and Content Rewards. Sign in to both, then close the window.\n"
                            "Use the same TikTok account you linked on Content Rewards (@clipping_cartel_1).",
                   style="Card.TLabel").pack(anchor="w", pady=6)
         ttk.Button(c1, text="Sign in to TikTok + Content Rewards", style="Accent.TButton", command=self._login).pack(anchor="w")
@@ -406,7 +407,7 @@ class App:
                 poster.open_for_login(self.agent.settings["posting"], ["https://www.tiktok.com/login", "https://contentrewards.com/c/home"])
                 self.agent.log("info", "Sign-in window closed")
             except Exception as e:
-                self.agent.log("error", f"Couldn't open the browser: {e}. If it says Playwright browsers are missing, install Microsoft Edge.")
+                self.agent.log("error", f"Couldn't open the browser: {e}. Check the browser setting in Settings → Posting.")
             finally:
                 self.agent.browser_lock.release()
         threading.Thread(target=go, daemon=True).start()
