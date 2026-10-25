@@ -121,23 +121,35 @@ def build_ass(clip, words, cfg, dramatic, path):
         ev.append(f"Dialogue: 0,{_ass_time(a)},{_ass_time(b)},Cap,,0,0,0,,{{\\pos(540,{y}){pop}}}{' '.join(parts)}")
 
     if big_words:
-        first = _ass_escape(big_words[0]["w"].upper())
-        rest = _ass_escape(" ".join(w["w"] for w in big_words[1:]).upper())
-        t1 = big_words[1]["s"] if len(big_words) > 1 else P + 0.5
+        # build the punchline up word by word; the last word lands in red with a shake
+        starts, t = [], P
+        for k, w in enumerate(big_words):
+            t = max(t, w["s"]) if k else P
+            starts.append(t)
+            t += 0.12
+        end_all = big_win[1]
         size = lambda txt: 128 if len(txt) <= 13 else (104 if len(txt) <= 20 else 86)
-        ev.append(f"Dialogue: 2,{_ass_time(P)},{_ass_time(t1 if rest else big_win[1])},Big,,0,0,0,,"
-                  f"{{\\pos(540,1430)\\fs{size(first)}\\fscx220\\fscy220\\t(0,120,\\fscx100\\fscy100)\\frz-5}}{first}")
-        if rest:
-            lines = _wrap(rest, 14)
-            txt = "\\N".join(lines)
+        for k in range(len(big_words)):
+            a_t = starts[k]
+            b_t = starts[k + 1] if k + 1 < len(big_words) else end_all
+            shown = [_ass_escape(w["w"].upper()) for w in big_words[:k + 1]]
+            lines = _wrap(" ".join(shown), 14)
             fs = size(max(lines, key=len))
-            ev.append(f"Dialogue: 2,{_ass_time(t1)},{_ass_time(big_win[1])},Big,,0,0,0,,"
-                      f"{{\\pos(540,1430)\\fs{fs}\\fscx240\\fscy240\\t(0,110,\\fscx100\\fscy100)\\frz4\\c{RED}}}{txt}")
-            for k, (dx, dy) in enumerate([(-14, 6), (12, -8), (-9, 5), (8, -4), (-5, 3)]):
-                t = t1 + k * 0.06
-                ev.append(f"Dialogue: 3,{_ass_time(t)},{_ass_time(t + 0.06)},Big,,0,0,0,,"
-                          f"{{\\pos({540 + dx},{1430 + dy})\\fs{fs}\\frz4\\c{RED}}}{txt}")
-        clip["_t1"] = t1
+            last = k == len(big_words) - 1
+            body = []
+            for i, wd in enumerate(shown):
+                col = RED if (i == len(shown) - 1 and k > 0) else WHITE
+                body.append("{\\c" + col + "}" + wd)
+            txt = " ".join(body)
+            pop = "\\fscx220\\fscy220\\t(0,120,\\fscx100\\fscy100)" if k == 0 else ("\\fscx130\\fscy130\\t(0,90,\\fscx100\\fscy100)" if last else "")
+            rot = "\\frz-5" if k == 0 else "\\frz4"
+            ev.append(f"Dialogue: 2,{_ass_time(a_t)},{_ass_time(b_t)},Big,,0,0,0,,{{\\pos(540,1430)\\fs{fs}\\q0{pop}{rot}}}{txt}")
+            if last and k > 0:
+                for j, (dx, dy) in enumerate([(-14, 6), (12, -8), (-9, 5), (8, -4), (-5, 3)]):
+                    tt = a_t + 0.12 + j * 0.06
+                    ev.append(f"Dialogue: 3,{_ass_time(tt)},{_ass_time(tt + 0.06)},Big,,0,0,0,,"
+                              f"{{\\pos({540 + dx},{1430 + dy})\\fs{fs}\\q0{rot}}}{txt}")
+        clip["_t1"] = starts[-1]
 
     title = _ass_escape(clip.get("title") or "")
     if title:
