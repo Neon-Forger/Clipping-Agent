@@ -289,7 +289,7 @@ class Agent:
             quiet = (qs <= h < qe) if qs < qe else (h >= qs or h < qe)
             if not quiet:
                 break
-            d = (d + dt.timedelta(hours=1)).replace(minute=random_minute(), second=0)
+            d = (d + dt.timedelta(hours=1)).replace(minute=7, second=0)
         return d
 
     def _poster_loop(self):
