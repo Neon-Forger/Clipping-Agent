@@ -1,0 +1,229 @@
+"""Settings: stored as JSON in the app data folder. Every field can be edited
+from the PC app, by hand in settings.json, or from the phone with `set <key> <value>`."""
+import copy
+import json
+import os
+import secrets
+import sys
+import threading
+
+APP_NAME = "ClipCartelAgent"
+
+
+def data_dir():
+    base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    d = os.path.join(base, APP_NAME)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def default_output_dir():
+    return os.path.join(os.path.expanduser("~"), "Videos", "ClipCartel")
+
+
+DEFAULTS = {
+    "paused": False,
+    # ---- where clips come from ----
+    "sources": [
+        {
+            "name": "2 Bears 1 Cave",
+            "enabled": True,
+            # A YouTube channel/playlist to watch for NEW videos, and/or fixed video links.
+            "channel_url": "https://www.youtube.com/@YMHStudios/videos",
+            "video_urls": ["https://youtu.be/3pDAyRLPO58"],
+            "title_must_contain": "2 Bears, 1 Cave",
+            "only_newer_than_days": 10,
+            # The Content Rewards campaign the clips are submitted to.
+            "campaign_url": "https://contentrewards.com/c/campaigns/295e9879-4464-4a31-975d-1c7b3a80d359",
+            "required_hashtags": ["#2BearsWeekly"],
+            "extra_hashtags": ["#bertkreischer", "#tomsegura", "#2bears1cave", "#comedy", "#fyp"],
+            "notes_for_ai": "Comedy podcast. Skip sad, violent or political segments and ad reads.",
+            "clips_per_video": 6,
+        }
+    ],
+    "check_sources_every_minutes": 60,
+    # ---- AI ----
+    "ai": {
+        "provider_order": ["gemini", "openrouter", "openai_compatible"],
+        "gemini_api_key": "",
+        "gemini_model": "gemini-2.5-flash",
+        "openrouter_api_key": "",
+        "openrouter_model": "google/gemini-2.5-flash",
+        "openai_compatible_base_url": "https://api.openai.com/v1",
+        "openai_compatible_api_key": "",
+        "openai_compatible_model": "gpt-4o-mini",
+        "custom_instructions": "",
+    },
+    "transcribe": {"model": "small.en", "device": "auto", "compute_type": "int8"},
+    # ---- editing ----
+    "edit": {
+        "min_seconds": 30,
+        "max_seconds": 60,
+        "style": "dramatic",          # "dramatic" (flashes, zooms, impact sounds) or "clean"
+        "censor_swears": True,
+        "caption_font_size": 82,
+        "hook_font_size": 80,
+        "progress_bar": True,
+        "sound_effects": True,
+        "zoom_focus_y": 0.44,
+        "video_crf": 19,
+        "max_upload_mb": 0,           # 0 = no limit; otherwise re-encode down to this size
+    },
+    "output_dir": default_output_dir(),
+    "delete_source_after_render": True,   # delete the downloaded full episode once its clips are made
+    # ---- posting ----
+    "posting": {
+        "auto_post": True,
+        "min_minutes_between_posts": 180,
+        "max_posts_per_day": 5,
+        "quiet_hours_start": 0,       # no posting from 00:00 ...
+        "quiet_hours_end": 5,         # ... until 05:00 (local time)
+        "browser_channel": "msedge",  # uses Microsoft Edge that's already on Windows
+        "headless": False,
+        "submit_to_content_rewards": True,
+        "submit_within_minutes": 25,  # Content Rewards only accepts links < 30 min old
+    },
+    # ---- phone (ntfy) ----
+    "ntfy": {
+        "server": "https://ntfy.sh",
+        "topic": "",                  # generated on first run; the phone app uses the same topic
+        "token": "",                  # optional access token for a protected / self-hosted server
+        "notify_level": "normal",     # "quiet" | "normal" | "verbose"
+    },
+    "start_with_windows": False,
+    "keep_pc_awake": True,
+    # Advanced: page selectors, editable if TikTok / Content Rewards change their sites.
+    "selectors": {
+        "tiktok_upload_url": "https://www.tiktok.com/tiktokstudio/upload",
+        "tiktok_content_url": "https://www.tiktok.com/tiktokstudio/content",
+        "tiktok_file_input": "input[type=file][accept='video/*']",
+        "tiktok_caption_editor": ".public-DraftEditor-content",
+        "tiktok_uploaded_text": "Uploaded",
+        "tiktok_post_button": "[data-e2e=post_video_button]",
+        "tiktok_video_link": "a[href*='/video/']",
+        "cr_submit_button_text": "Submit clip",
+        "cr_dialog": "[role=dialog][aria-label='Submit clip']",
+        "cr_link_input": "input[type=url]",
+        "cr_submissions_url": "https://contentrewards.com/c/submissions",
+    },
+}
+
+SECRET_KEYS = {"gemini_api_key", "openrouter_api_key", "openai_compatible_api_key", "token"}
+
+_lock = threading.RLock()
+
+
+def _merge(base, extra):
+    out = copy.deepcopy(base)
+    for k, v in (extra or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+class Settings:
+    def __init__(self, path=None):
+        self.path = path or os.path.join(data_dir(), "settings.json")
+        self.data = copy.deepcopy(DEFAULTS)
+        self.load()
+
+    def load(self):
+        with _lock:
+            if os.path.exists(self.path):
+                try:
+                    with open(self.path, "r", encoding="utf-8") as f:
+                        self.data = _merge(DEFAULTS, json.load(f))
+                except Exception:
+                    pass
+            if not self.data["ntfy"].get("topic"):
+                self.data["ntfy"]["topic"] = "clipcartel-" + secrets.token_hex(6)
+                self.save()
+
+    def save(self):
+        with _lock:
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, indent=2)
+            os.replace(tmp, self.path)
+
+    def __getitem__(self, k):
+        return self.data[k]
+
+    def get(self, dotted, default=None):
+        cur = self.data
+        for part in dotted.split("."):
+            if isinstance(cur, list):
+                try:
+                    cur = cur[int(part)]
+                    continue
+                except Exception:
+                    return default
+            if not isinstance(cur, dict) or part not in cur:
+                return default
+            cur = cur[part]
+        return cur
+
+    def set(self, dotted, value):
+        """Set a value by dotted path, e.g. `posting.max_posts_per_day` or `sources.0.enabled`.
+        Strings are parsed as JSON when possible (numbers, true/false, lists)."""
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except Exception:
+                pass
+        with _lock:
+            parts = dotted.split(".")
+            cur = self.data
+            for p in parts[:-1]:
+                if isinstance(cur, list):
+                    cur = cur[int(p)]
+                else:
+                    cur = cur.setdefault(p, {})
+            last = parts[-1]
+            if isinstance(cur, list):
+                cur[int(last)] = value
+            else:
+                cur[last] = value
+            self.save()
+        return value
+
+    def replace_all(self, new_data):
+        with _lock:
+            # keep secrets the phone never saw (they arrive masked)
+            merged = _merge(DEFAULTS, new_data)
+            _restore_secrets(merged, self.data)
+            self.data = merged
+            self.save()
+
+    def masked(self):
+        return _mask(copy.deepcopy(self.data))
+
+
+def _mask(d):
+    if isinstance(d, dict):
+        for k, v in d.items():
+            if k in SECRET_KEYS and isinstance(v, str) and v:
+                d[k] = "••••" + v[-4:]
+            else:
+                _mask(v)
+    elif isinstance(d, list):
+        for v in d:
+            _mask(v)
+    return d
+
+
+def _restore_secrets(new, old):
+    if isinstance(new, dict) and isinstance(old, dict):
+        for k, v in new.items():
+            if k in SECRET_KEYS and isinstance(v, str) and v.startswith("••••"):
+                new[k] = old.get(k, "")
+            else:
+                _restore_secrets(v, old.get(k))
+
+
+def resource_path(*parts):
+    """Path to bundled files (works both from source and from the packaged .exe)."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(base, *parts)
