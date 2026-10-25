@@ -15,16 +15,26 @@ def _channel_context(s):
     if s.get("style_notes"):
         bits.append(f"Always follow: {s['style_notes']}")
     if s["ai"].get("custom_instructions"):
-        bits.append(f"Owner's extra instructions: {s['ai']['custom_instructions']}")
+        bits.append(f"Owner's instructions (follow them): {s['ai']['custom_instructions']}")
+    if (s.get("visual_style") or "stock") == "stickman" or s.get("visual_instructions"):
+        bits.append("How the video will look (the editor handles visuals; write narration that fits it): "
+                    + ((s.get("visual_instructions") or "").strip()[:1500] or "a crude stickman meme edit over real photos"))
     return "\n".join(bits)
 
 
-def new_idea(s, kind, past_titles):
+def _brief_block(brief):
+    if not brief:
+        return ""
+    return ("\nTHE OWNER ASKED FOR THIS SPECIFIC VIDEO. It overrides the usual genre ideas; follow every detail:\n"
+            f"{brief}\n")
+
+
+def new_idea(s, kind, past_titles, brief=None):
     """kind: 'long' or 'short'. Returns {title, hook, angle}."""
     past = "\n".join(f"- {t}" for t in past_titles[-60:]) or "(none yet)"
     prompt = f"""You run a faceless YouTube channel.
 {_channel_context(s)}
-
+{_brief_block(brief)}
 Come up with ONE new {'long-form video (about %d minutes)' % s['long']['minutes'] if kind == 'long' else 'YouTube Short (under 60 seconds)'} idea
 that fits the genre, has a strong curiosity hook, and is NOT a repeat of these past videos:
 {past}
@@ -35,7 +45,7 @@ Return JSON: {{"title": "max 70 chars, curiosity-driven, no clickbait lies", "ho
     return _ask_json(s["ai"], prompt)
 
 
-def script(s, kind, idea):
+def script(s, kind, idea, brief=None):
     """Returns {"segments": [{"text", "visual"}], "description", "tags", "thumbnail_text"}."""
     if kind == "long":
         words = int(s["long"]["minutes"] * 150)
@@ -48,6 +58,7 @@ def script(s, kind, idea):
                  'segments where a new part begins.') if kind == "long" else ""
     prompt = f"""Write the narration for a faceless YouTube {'video' if kind == 'long' else 'Short'}.
 {_channel_context(s)}
+{_brief_block(brief)}
 Title: {idea.get('title')}
 Hook: {idea.get('hook')}
 Angle: {idea.get('angle')}

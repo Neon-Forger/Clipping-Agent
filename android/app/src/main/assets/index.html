@@ -166,8 +166,8 @@
     <div class="grid2">
       <button class="acc" id="y_pause" onclick="cmd(yState && yState.paused ? 'yt resume' : 'yt pause')">PAUSE</button>
       <button onclick="cmd('yt status')">Status</button>
-      <button onclick="cmd('yt make long')">Make long video</button>
-      <button onclick="cmd('yt make short')">Make a Short</button>
+      <button onclick="makeYt('long')">Make long video</button>
+      <button onclick="makeYt('short')">Make a Short</button>
       <button onclick="if(confirm('Upload the next finished video now?')) cmd('yt upload')">Upload next now</button>
       <button onclick="cmd('yt list')">Video list</button>
     </div>
@@ -181,7 +181,18 @@
       <button class="acc" onclick="sendFree('y')" style="width:100%">SEND</button>
     </div>
     <div class="card">
-      <label>Extra instructions for the YouTube AI (style, topics, things to avoid)</label><textarea id="y_prompt"></textarea><br><br>
+      <label>Make one video about exactly this (topic, theme, details)</label>
+      <textarea id="y_brief" placeholder="e.g. a Halloween special about the Dyatlov Pass incident, creepy tone, end with a question"></textarea><br><br>
+      <div class="row"><button class="acc" onclick="makeYt('short', $('y_brief').value)">MAKE SHORT</button><button onclick="makeYt('long', $('y_brief').value)">Make long</button></div>
+    </div>
+    <div class="card">
+      <label>Visual style</label>
+      <div class="row"><button onclick="cmd('yt style stickman')">Stickman</button><button onclick="cmd('yt style stock')">Stock footage</button></div>
+      <label>Visual direction (how videos LOOK: art style, backgrounds, camera, graphics)</label><textarea id="y_visual" style="min-height:140px"></textarea><br><br>
+      <div class="row"><button onclick="cmd('yt visual '+$('y_visual').value)">Save</button><button onclick="cmd('yt visual clear')">Clear</button></div>
+    </div>
+    <div class="card">
+      <label>Script instructions (how the narration is written)</label><textarea id="y_prompt"></textarea><br><br>
       <div class="row"><button onclick="cmd('yt prompt '+$('y_prompt').value)">Save</button><button onclick="cmd('yt prompt clear')">Clear</button></div>
     </div>
     <div class="grid2">
@@ -259,6 +270,11 @@ async function cmd(text, quiet) {
   } catch (e) { toast("Couldn't send: " + e.message); }
 }
 function sendFree(p) { const v = $(p + "_free").value.trim(); if (v) { cmd((p === "y" ? "yt " : "") + v); $(p + "_free").value = ""; show("feed"); } }
+function makeYt(kind, brief) {
+  if (brief === undefined) brief = prompt("What should this " + (kind === "short" ? "Short" : "video") + " be about? (leave empty to let the AI pick)") ;
+  if (brief === null) return;
+  cmd(("yt make " + kind + " " + (brief || "")).trim()); if ($("y_brief")) $("y_brief").value = "";
+}
 function clipLink() { const u = $("clipUrl").value.trim(); if (!u) return; cmd("clip " + u + " " + ($("clipN").value || 5)); $("clipUrl").value = ""; }
 function askAI(prefix) { const q = prompt("Ask the AI:"); if (q) { cmd(prefix + "ask " + q); show("feed"); } }
 function login(service) {

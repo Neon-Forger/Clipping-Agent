@@ -15,7 +15,7 @@ import traceback
 from agent import ai, editor, sources, transcribe
 from agent.config import data_dir
 
-from . import render, studio, thumbs, visuals, writer
+from . import render, stickman, studio, thumbs, visuals, writer
 from .config import YTSettings
 
 SCHEMA = """
@@ -33,7 +33,9 @@ CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL
 """
 
 YT_HELP = """YouTube commands (send with "yt " in front, e.g. "yt status"):
-status · pause · resume · make long · make short · make long repurpose · make short original
+status · pause · resume · make long [what it's about] · make short [what it's about] · make short original/repurpose
+  e.g. "make short a Halloween special about the Dyatlov Pass" (the text after long/short is followed for that video)
+style stickman / style stock (switch the visual style) · visual <direction> (set the visual direction)
 upload (upload the next finished video now) · list · skip <id> · retry <id>
 set <setting> <value> · get <setting> · settings · prompt <text> · ask <question>"""
 
@@ -46,6 +48,9 @@ class YTAgent:
         self.lock = threading.RLock()
         with self.lock:
             self.conn.executescript(SCHEMA)
+            cols = {r[1] for r in self.conn.execute("PRAGMA table_info(items)")}
+            if "brief" not in cols:
+                self.conn.execute("ALTER TABLE items ADD COLUMN brief TEXT")
             self.conn.commit()
         self.state_path = os.path.join(data_dir(), "youtube_state.json")
         try:
@@ -173,9 +178,11 @@ class YTAgent:
             return "original"
         return "original" if random.random() < o / (o + r) else "repurpose"
 
-    def add_item(self, kind, mode=None):
-        return self.x("INSERT INTO items (kind,mode,day,status,created) VALUES (?,?,?,?,?)",
-                      (kind, mode or self._choose_mode(), dt.date.today().isoformat(), "planned", time.time()))
+    def add_item(self, kind, mode=None, brief=None):
+        if brief and not mode:
+            mode = "original"   # a specific request is written from scratch
+        return self.x("INSERT INTO items (kind,mode,day,status,created,brief) VALUES (?,?,?,?,?,?)",
+                      (kind, mode or self._choose_mode(), dt.date.today().isoformat(), "planned", time.time(), brief or None))
 
     # --------------------------------------------------------------- making
     def _maker_loop(self):
@@ -245,15 +252,21 @@ class YTAgent:
         iid, kind = it["id"], it["kind"]
         portrait = kind == "short"
         self.set_task(f"writing a {'Short' if portrait else 'video'}")
-        idea = writer.new_idea(self.s, kind, self.past_titles())
+        brief = (it.get("brief") or "").strip()
+        idea = writer.new_idea(self.s, kind, self.past_titles(), brief=brief)
         self.update(iid, title=idea.get("title"))
-        sc = writer.script(self.s, kind, idea)
+        sc = writer.script(self.s, kind, idea, brief=brief)
         self.set_task(f"making: {idea.get('title', '')[:40]}")
         work = self._work(iid)
         name = _safe(idea.get("title") or f"video {iid}")
         out = os.path.join(self._out_dir(), f"{iid} - {name}{' (Short)' if portrait else ''}.mp4")
-        render.build_original(self.s, sc["segments"], portrait, work, out, log=self.log)
+        if (self.s.get("visual_style") or "stock") == "stickman":
+            _, credits = stickman.build(self.s, sc["segments"], portrait, work, out, log=self.log)
+        else:
+            _, credits = render.build_original(self.s, sc["segments"], portrait, work, out, log=self.log)
         desc = (sc.get("description") or "").strip()
+        if credits:
+            desc += "\n\nPhotos: " + "; ".join(dict.fromkeys(credits))
         if not portrait and self.s["long"].get("chapters"):
             ch = _chapters(work)
             if ch:
@@ -486,12 +499,29 @@ class YTAgent:
             self.wake.set()
             return "▶ YouTube running."
         if cmd == "make":
-            bits = arg.lower().split()
-            kind = "short" if bits and bits[0].startswith("short") else "long"
-            mode = "repurpose" if "repurpose" in bits else ("original" if "original" in bits else None)
-            iid = self.add_item(kind, mode)
+            words = arg.split()
+            kind = "long"
+            if words and words[0].lower().startswith(("short", "long", "video")):
+                kind = "short" if words[0].lower().startswith("short") else "long"
+                words = words[1:]
+            mode = None
+            if words and words[0].lower() in ("original", "repurpose", "repurposed"):
+                mode = "repurpose" if words[0].lower().startswith("repurpose") else "original"
+                words = words[1:]
+            brief = " ".join(words).strip(" :-")
+            iid = self.add_item(kind, mode, brief or None)
             self.wake.set()
-            return f"🎬 Making a {'Short' if kind == 'short' else 'long video'} now (#{iid})."
+            return (f"🎬 Making a {'Short' if kind == 'short' else 'long video'} now (#{iid})"
+                    + (f" about: {brief[:120]}" if brief else "") + ".")
+        if cmd == "style":
+            st = arg.strip().lower()
+            if st not in ("stickman", "stock"):
+                return "Use: style stickman  or  style stock"
+            s.set("visual_style", st)
+            return f"✔ Visual style: {st}"
+        if cmd == "visual":
+            s.set("visual_instructions", "" if arg.lower() == "clear" else arg, raw=True)
+            return "✔ Visual direction " + ("cleared." if arg.lower() == "clear" else "saved. New videos will follow it.")
         if cmd == "upload":
             self.upload_now = True
             return "📺 Uploading the next finished video now."
@@ -525,7 +555,7 @@ class YTAgent:
             s.replace_all(json.loads(arg))
             return "✔ YouTube settings saved."
         if cmd == "prompt":
-            s.set("ai.custom_instructions", "" if arg.lower() == "clear" else arg)
+            s.set("ai.custom_instructions", "" if arg.lower() == "clear" else arg, raw=True)
             return "✔ YouTube AI instructions updated."
         if cmd == "ask":
             ctx = {"status": self.status(), "recent": [e["text"] for e in self.q("SELECT text FROM events ORDER BY id DESC LIMIT 20")]}
@@ -535,8 +565,12 @@ class YTAgent:
 
     def _natural(self, text):
         prompt = (YT_HELP + "\n\nYouTube settings (dotted paths for 'set'): " + json.dumps(self.s.masked())[:7000] +
-                  "\n\nThe owner sent this from their phone: \"" + text + "\"\nTurn it into commands from the list above "
-                  "(WITHOUT the 'yt ' prefix). If it's a question, use 'ask'. Return JSON: {\"commands\": [\"...\"], \"reply\": \"short confirmation\"}")
+                  "\n\nThe owner sent this from their phone: \"" + text[:6000] + "\"\nTurn it into commands from the list above "
+                  "(WITHOUT the 'yt ' prefix). If it's a question, use 'ask'. If they ask for a video, use 'make short <brief>' or "
+                  "'make long <brief>' and put EVERYTHING they asked for about that video (topic, theme, tone, details) in the brief. "
+                  "If they describe how videos should LOOK (art style, animation, backgrounds, editing), use 'visual <their full "
+                  "description>' (and 'style stickman' if they want a stickman/cutout style). If they describe how scripts should be "
+                  "written, use 'prompt <their full text>'. Return JSON: {\"commands\": [\"...\"], \"reply\": \"short confirmation\"}")
         try:
             data = ai.parse_json(ai.ask(self.s["ai"], prompt, json_mode=True))
         except ai.NoAIKey:
@@ -545,7 +579,7 @@ class YTAgent:
         for c in (data.get("commands") or [])[:8]:
             c = c[3:] if c.lower().startswith("yt ") else c
             if c.split(" ")[0].lower() in ("help", "status", "pause", "resume", "start", "make", "upload", "list", "skip", "retry",
-                                           "set", "get", "settings", "prompt", "ask"):
+                                           "set", "get", "settings", "prompt", "ask", "style", "visual"):
                 r = self.run_command(c)
                 if r:
                     outs.append(r)

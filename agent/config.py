@@ -189,10 +189,10 @@ class Settings:
             cur = cur[part]
         return cur
 
-    def set(self, dotted, value):
+    def set(self, dotted, value, raw=False):
         """Set a value by dotted path, e.g. `posting.max_posts_per_day` or `sources.0.enabled`.
         Strings are parsed as JSON when possible (numbers, true/false, lists)."""
-        if isinstance(value, str):
+        if isinstance(value, str) and not raw:
             try:
                 value = json.loads(value)
             except Exception:

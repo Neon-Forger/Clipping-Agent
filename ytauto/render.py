@@ -91,6 +91,9 @@ def build_original(s, segments, portrait, work, out_path, log=None):
     used = set()
     parts, all_words, t0, chapters = [], [], 0.0, []
     stock = os.path.join(os.path.dirname(work), "_stock")
+    from .stickman import PhotoSource
+    photos = PhotoSource(s, os.path.join(os.path.dirname(work), "_photos"), None)
+    warned = False
     for i, seg in enumerate(segments):
         if log:
             log("info", f"Voice + footage {i + 1}/{len(segments)}")
@@ -105,9 +108,18 @@ def build_original(s, segments, portrait, work, out_path, log=None):
             img = visuals.ai_image(s["ai"], f"Cinematic, moody, high-detail scene: {seg.get('visual') or s['genre']}",
                                    os.path.join(work, f"i{i:02d}.png"), "9:16" if portrait else "16:9") \
                 if s.get("thumbnails", {}).get("ai_images") else None
+            if not img:
+                ph = photos.get(seg.get("visual") or s["genre"], portrait)
+                if ph is not None:
+                    img = os.path.join(work, f"p{i:02d}.jpg")
+                    ph.save(img, "JPEG", quality=92)
             if img:
                 _fit_clip(img, dur, clip, portrait, still=True, zoom_seed=i)
             else:
+                if log and not warned:
+                    warned = True
+                    log("warn", "No footage or photo found for some parts, so they use the neon background. "
+                                "Add a free Pexels key in YouTube → SETTINGS for real stock footage.")
                 loop = os.path.join(stock, f"neon_loop_{'p' if portrait else 'l'}.mp4")
                 if not os.path.exists(loop):
                     os.makedirs(stock, exist_ok=True)
@@ -124,7 +136,8 @@ def build_original(s, segments, portrait, work, out_path, log=None):
     with open(os.path.join(work, "segments.json"), "w", encoding="utf-8") as f:
         import json
         json.dump(chapters, f)
-    return _finish(s, parts, all_words, portrait, work, out_path)
+    _finish(s, parts, all_words, portrait, work, out_path)
+    return out_path, photos.credits
 
 
 def _finish(s, parts, words, portrait, work, out_path):

@@ -105,10 +105,15 @@ class YouTubeView:
         self.task_lbl.pack(anchor="w")
         self.next_lbl = ttk.Label(info, text="", style="CardMuted.TLabel")
         self.next_lbl.pack(anchor="w", pady=(4, 0))
+        br = ttk.Frame(f)
+        br.pack(fill="x", pady=(8, 0), padx=6)
+        ttk.Label(br, text="Next video is about (optional, followed exactly):", style="Muted.TLabel").pack(side="left")
+        self.brief_var = tk.StringVar()
+        ttk.Entry(br, textvariable=self.brief_var).pack(side="left", fill="x", expand=True, padx=8)
         b = ttk.Frame(f)
         b.pack(fill="x", pady=8, padx=6)
-        ttk.Button(b, text="Make a long video now", style="Accent.TButton", command=lambda: self._cmd("make long")).pack(side="left", padx=(0, 6))
-        ttk.Button(b, text="Make a Short now", command=lambda: self._cmd("make short")).pack(side="left", padx=6)
+        ttk.Button(b, text="Make a long video now", style="Accent.TButton", command=lambda: self._make("long")).pack(side="left", padx=(0, 6))
+        ttk.Button(b, text="Make a Short now", command=lambda: self._make("short")).pack(side="left", padx=6)
         ttk.Button(b, text="Upload next now", command=lambda: self._cmd("upload")).pack(side="left", padx=6)
         ttk.Button(b, text="Open videos folder", command=lambda: open_path(self._outdir())).pack(side="left", padx=6)
         ttk.Label(f, text="Activity", style="Muted.TLabel").pack(anchor="w", padx=8)
@@ -118,6 +123,11 @@ class YouTubeView:
         self.logbox.tag_config("warn", foreground=theme.GOLD)
         for e in reversed(self.yt.q("SELECT level, text FROM events ORDER BY id DESC LIMIT 120")):
             self._append(e["level"], e["text"])
+
+    def _make(self, kind):
+        brief = " ".join(self.brief_var.get().split())
+        self._cmd(f"make {kind} {brief}".strip())
+        self.brief_var.set("")
 
     def _outdir(self):
         d = self.yt.s["output_dir"]
@@ -329,9 +339,27 @@ class YouTubeView:
         self.cvars = {}
         c = self._card(inner, "WHAT THE CHANNEL MAKES")
         for key, label in (("genre", "Genre / niche (e.g. unsolved mysteries, space facts, motivational stories)"),
-                           ("audience", "Audience"), ("language", "Language"), ("style_notes", "Always do / never do (notes for the AI)"),
-                           ("ai.custom_instructions", "Extra AI instructions")):
+                           ("audience", "Audience"), ("language", "Language"), ("style_notes", "Always do / never do (notes for the AI)")):
             self._row(c, key, label)
+        ttk.Label(c, text="Script instructions (how the narration is written: tone, structure, hooks, length...)",
+                  style="Card.TLabel").pack(anchor="w", pady=(8, 2))
+        self.script_text = self._text(c, s["ai"].get("custom_instructions") or "", 5)
+
+        c = self._card(inner, "HOW VIDEOS LOOK",
+                       "stock = stock footage / real photos with word captions.  stickman = a crude stickman cutout pasted over real "
+                       "photos, flat app screens or black, with hard cuts, fly-ins, punch-in zooms and meme graphics (tier board, "
+                       "progress ring, photo card, text panel). The AI plans every shot from your visual direction.")
+        r = ttk.Frame(c, style="Card.TFrame")
+        r.pack(fill="x", pady=3)
+        ttk.Label(r, text="Visual style", style="Card.TLabel", width=58).pack(side="left")
+        self.style_var = tk.StringVar(value=s.get("visual_style") or "stock")
+        ttk.Combobox(r, textvariable=self.style_var, values=["stock", "stickman"], state="readonly", width=14).pack(side="left")
+        ttk.Label(c, text="Visual direction (art style, placement, backgrounds, camera, graphics, things to never do)",
+                  style="Card.TLabel").pack(anchor="w", pady=(8, 2))
+        self.visual_text = self._text(c, s.get("visual_instructions") or "", 9)
+        self.stick_caps = tk.BooleanVar(value=bool(s.get("stickman_captions")))
+        ttk.Checkbutton(c, text="Word captions in the stickman style", variable=self.stick_caps,
+                        style="Card.TCheckbutton").pack(anchor="w", pady=6)
         c = self._card(inner, "DAILY PLAN", "Runs while the PC is on and NeonClip is open. Times are 24h, your local time.")
         for key, label in (("daily.long_videos", "Long videos per day"), ("daily.shorts", "Shorts per day"),
                            ("daily.make_at", "Start making at (HH:MM)"), ("daily.upload_times", "Upload times (comma separated, e.g. 12:00, 15:00, 18:00)"),
@@ -348,6 +376,12 @@ class YouTubeView:
         ttk.Checkbutton(c, text="Also search YouTube for Creative Commons videos in my genre (credited in the description)",
                         variable=self.cc_var, style="Card.TCheckbutton").pack(anchor="w", pady=6)
         ttk.Button(inner, text="Save content settings", style="Accent.TButton", command=self._save_content).pack(anchor="w", padx=8, pady=12)
+
+    def _text(self, parent, value, height):
+        t = tk.Text(parent, height=height, bg=theme.PANEL2, fg=FG, insertbackground=ICE, relief="flat", font=(theme.MONO, 10), wrap="word")
+        t.pack(fill="x")
+        t.insert("1.0", value)
+        return t
 
     def _row(self, parent, key, label, secret=False):
         r = ttk.Frame(parent, style="Card.TFrame")
@@ -388,6 +422,10 @@ class YouTubeView:
             srcs.append({"url": url.strip(), "rights": rights, "note": ""})
         s.set("sources", srcs)
         s.set("find_creative_commons", bool(self.cc_var.get()))
+        s.set("ai.custom_instructions", self.script_text.get("1.0", "end").strip(), raw=True)
+        s.set("visual_style", self.style_var.get() or "stock")
+        s.set("visual_instructions", self.visual_text.get("1.0", "end").strip(), raw=True)
+        s.set("stickman_captions", bool(self.stick_caps.get()))
         self.yt.wake.set()
         messagebox.showinfo("NeonClip", "Saved.")
 

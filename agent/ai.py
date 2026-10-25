@@ -47,6 +47,24 @@ def pick_gemini_model(key):
     return best
 
 
+def _alternates(key, current):
+    """Other usable text models, best first (used when the main one is overloaded)."""
+    try:
+        r = requests.get(f"{GEMINI_BASE}/models?pageSize=200", headers={"x-goog-api-key": key}, timeout=30)
+        names = [m["name"].split("/")[-1] for m in r.json().get("models", [])
+                 if "generateContent" in (m.get("supportedGenerationMethods") or [])]
+    except Exception:
+        return []
+    ok = [n for n in names if n.startswith("gemini") and n != current and "flash" in n
+          and not any(x in n for x in ("image", "tts", "audio", "live", "embedding", "thinking", "exp", "robotics", "computer"))]
+
+    def ver(n):
+        v = re.findall(r"gemini-(\d+(?:\.\d+)?)", n)
+        return float(v[0]) if v else 0
+    ok.sort(key=lambda n: ("lite" in n, "preview" in n, -ver(n)))
+    return ok[:3]
+
+
 def _gemini_call(key, model, prompt, json_mode):
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.6}}
@@ -65,6 +83,14 @@ def _gemini(cfg, prompt, json_mode):
     if r.status_code == 404:  # model retired / not available: pick one that exists
         model = pick_gemini_model(key)
         r = _gemini_call(key, model, prompt, json_mode)
+    if r.status_code in (429, 500, 503):  # busy / rate limited: try the other flash models before giving up
+        import time as _t
+        for alt in _alternates(key, model):
+            _t.sleep(2)
+            r2 = _gemini_call(key, alt, prompt, json_mode)
+            if r2.status_code < 400:
+                r, model = r2, alt
+                break
     if r.status_code >= 400:
         try:
             msg = r.json().get("error", {}).get("message", "")

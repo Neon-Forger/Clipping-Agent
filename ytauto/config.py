@@ -43,6 +43,9 @@ DEFAULTS = {
     "pexels_api_key": "",           # free key from pexels.com/api, used for stock footage
     "music_folder": "",             # optional: folder of music you have the rights to
     "music_volume": 0.12,
+    "visual_style": "stock",        # stock = stock footage/photos + captions | stickman = stickman cutout meme edit
+    "visual_instructions": "",      # how videos should LOOK (followed beat by beat by the AI editor)
+    "stickman_captions": False,     # burn word captions in the stickman style
     "captions": True,
     "caption_style": "neon",        # neon | clean
     # ---- thumbnails ----
@@ -93,3 +96,16 @@ DEFAULTS = {
 class YTSettings(Settings):
     def __init__(self):
         super().__init__(path=os.path.join(data_dir(), "youtube.json"), defaults=DEFAULTS)
+
+    def after_load(self):
+        changed = super().after_load()
+        ci = (self.data.get("ai", {}).get("custom_instructions") or "")
+        visual_words = ("ANIMATION", "BACKGROUND", "CAMERA", "9:16", "stickman", "cutout", "PLACEMENT")
+        if ci and not self.data.get("visual_instructions") and sum(w.lower() in ci.lower() for w in visual_words) >= 2:
+            # a visual direction was saved as script instructions (older versions only had that box)
+            self.data["visual_instructions"] = ci
+            self.data["ai"]["custom_instructions"] = ""   # moved (the script writer still sees it as the look of the video)
+            if "stickman" in ci.lower():
+                self.data["visual_style"] = "stickman"
+            changed = True
+        return changed
