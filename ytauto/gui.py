@@ -179,14 +179,14 @@ class YouTubeView:
         s = self.yt.s
         c1 = self._card(inner, "1 · SIGN IN WITH GOOGLE",
                         "Opens a normal browser window (its own profile, separate from Clipping and from your everyday browser). "
-                        "Sign in to the Google account that owns (or will own) the channel, then close the window.")
+                        "Sign in to the Google account that owns (or will own) the channel. You can leave that window open.")
         ttk.Button(c1, text="Sign in to YouTube", style="Accent.TButton",
                    command=lambda: self._bg(studio.sign_in, s, self.yt.log, False)).pack(anchor="w")
 
         c2 = self._card(inner, "2 · PICK OR CREATE THE CHANNEL",
-                        "Use an existing channel: click \"Choose channel\", click the channel in the window that opens, close it, "
+                        "Use an existing channel: click \"Choose channel\", click the channel in the window that opens, "
                         "then click \"Use the open channel\".  New channel: click \"Create new channel\", follow YouTube's steps, "
-                        "close the window, then click \"Use the open channel\".")
+                        "then click \"Use the open channel\".")
         row = ttk.Frame(c2, style="Card.TFrame")
         row.pack(anchor="w")
         ttk.Button(row, text="Choose channel", command=lambda: self._bg(studio.open_page, s, "https://www.youtube.com/channel_switcher", self.yt.log)).pack(side="left")
