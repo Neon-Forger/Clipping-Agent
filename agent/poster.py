@@ -135,18 +135,74 @@ def _cdp_alive(port):
         return False
 
 
+def _choice_path():
+    return os.path.join(data_dir(), "browser_choice.json")
+
+
+def _load_choice():
+    import json
+    try:
+        with open(_choice_path(), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_choice(prefix, name):
+    import json
+    d = _load_choice()
+    d[prefix] = name
+    try:
+        with open(_choice_path(), "w", encoding="utf-8") as f:
+            json.dump(d, f)
+    except Exception:
+        pass
+
+
+def profile_in_use(user_data_dir):
+    """True if a browser is already running on this profile (Chromium keeps 'lockfile' open while it runs)."""
+    lock = os.path.join(user_data_dir, "lockfile")
+    if not os.path.exists(lock):
+        return False
+    try:
+        with open(lock, "a"):
+            pass
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+
+
+class ProfileInUse(RuntimeError):
+    pass
+
+
 def ensure_cdp_browser(posting_cfg, prefix="browser-profile", log=None, urls=None):
     """Starts the section's browser as a NORMAL browser (so Google & co. treat it like any browser),
     with a local remote-debugging port so NeonClip can drive it. Reuses it if it's already open.
+    Always uses the same browser + profile as last time, so a sign-in is never lost by switching browsers.
     Returns the port."""
     import subprocess
     port = CDP_PORTS.get(prefix, 9339)
     if _cdp_alive(port):
         return port
+    targets = [t for t in browser_targets(posting_cfg, prefix) if t[2] and os.path.isfile(t[2])]
+    # de-duplicate (the preferred browser can appear twice) and put the one used last time first
+    seen, uniq = set(), []
+    for t in targets:
+        if t[0] not in seen:
+            seen.add(t[0])
+            uniq.append(t)
+    remembered = _load_choice().get(prefix)
+    uniq.sort(key=lambda t: t[0] != remembered)
     errors = []
-    for name, kw, exe in browser_targets(posting_cfg, prefix):
-        if not exe or not os.path.isfile(exe):
-            continue
+    for i, (name, kw, exe) in enumerate(uniq):
+        if profile_in_use(kw["user_data_dir"]):
+            # A NeonClip window for this section is already open without the control port (e.g. from an older
+            # version). Switching to another browser would lose the sign-in, so ask to close it instead.
+            raise ProfileInUse(f"NeonClip's {name} window for this section is still open from before. Close that {name} "
+                               "window (the one you signed in with), then click the button again. Your sign-in is kept.")
         cmd = [exe, f"--remote-debugging-port={port}", f"--user-data-dir={kw['user_data_dir']}", "--no-first-run",
                "--no-default-browser-check", "--remote-allow-origins=*"] + list(urls or ["about:blank"])
         try:
@@ -158,6 +214,9 @@ def ensure_cdp_browser(posting_cfg, prefix="browser-profile", log=None, urls=Non
             if _cdp_alive(port):
                 if log:
                     log("info", f"Opened {name} for this section.")
+                if remembered and remembered != name and log:
+                    log("warn", f"Using {name} instead of {remembered} for this section; you may need to sign in again in {name}.")
+                _save_choice(prefix, name)
                 return port
             time.sleep(0.5)
         errors.append(f"{name} didn't open its control port")
