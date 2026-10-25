@@ -296,7 +296,13 @@ class Agent:
             h = h.strip()
             if h and h.lower() not in [t.lower() for t in tags]:
                 tags.append(h if h.startswith("#") else "#" + h)
-        return (c.get("caption") or c.get("title") or "").strip() + " " + " ".join(tags[:8])
+        cap = (c.get("caption") or c.get("title") or "").strip()
+        extra = (src.get("caption_extra") or "").strip()
+        if extra:
+            cap += "\n" + extra
+        # required hashtags are always kept; others fill up to 8 total
+        req = len([h for h in (src.get("required_hashtags") or []) if h.strip()])
+        return cap + "\n" + " ".join(tags[:max(8, req)])
 
     # ------------------------------------------------------------------ poster
     def next_post_time(self):
@@ -541,7 +547,7 @@ class Agent:
     def _clip_url(self, url, n):
         try:
             info = sources.video_info(url)
-            src = self.settings["sources"][0] if self.settings["sources"] else {"name": "manual"}
+            src = self._source_for(info) or (self.settings["sources"][0] if self.settings["sources"] else {"name": "manual"})
             if not self.db.add_video(info["id"], src.get("name", "manual"), info.get("webpage_url") or url, info.get("title", ""), info.get("duration")):
                 self.db.update_video(info["id"], status="new", error=None)  # clip it again (skips moments already used)
             if n:
@@ -549,6 +555,22 @@ class Agent:
             self.wake.set()
         except Exception as e:
             self.log("error", f"Couldn't clip {url}: {e}", notify=True, title="⚠️ Clip failed")
+
+    def _source_for(self, info):
+        """The source a video belongs to: listed in its video links, or from the channel it watches."""
+        vid = info.get("id", "")
+        chan = [(info.get(k) or "").lower().rstrip("/") for k in ("channel_url", "uploader_url")]
+        for s in self.settings["sources"]:
+            if any(vid and vid in u for u in (s.get("video_urls") or [])):
+                return s
+        for s in self.settings["sources"]:
+            c = (s.get("channel_url") or "").lower().rstrip("/")
+            for suffix in ("/videos", "/streams", "/featured"):
+                if c.endswith(suffix):
+                    c = c[: -len(suffix)]
+            if c and any(x and (x == c or x.endswith(c.split("youtube.com")[-1])) for x in chan):
+                return s
+        return None
 
     def _ask_ai(self, question):
         ctx = {"status": self.status(), "recent_log": [e["text"] for e in self.db.events(25)],

@@ -38,6 +38,7 @@ DEFAULTS = {
             "required_hashtags": ["#2BearsWeekly"],
             "extra_hashtags": ["#bertkreischer", "#tomsegura", "#2bears1cave", "#comedy", "#fyp"],
             "notes_for_ai": "Comedy podcast. Skip sad, violent or political segments and ad reads.",
+            "caption_extra": "",
             "clips_per_video": 6,
         }
     ],

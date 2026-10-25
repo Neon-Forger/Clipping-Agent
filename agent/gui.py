@@ -186,6 +186,7 @@ class App:
                   ("video_urls", "Specific video links (comma separated)"), ("title_must_contain", "Only videos whose title contains"),
                   ("only_newer_than_days", "Only videos newer than (days)"), ("campaign_url", "Content Rewards campaign link"),
                   ("required_hashtags", "Required hashtags (space separated)"), ("extra_hashtags", "Extra hashtags"),
+                  ("caption_extra", "Text added to every caption (e.g. 'Full episode on YouTube')"),
                   ("clips_per_video", "Clips per video"), ("notes_for_ai", "Notes for the AI")]
 
     def _tab_sources(self, f):
@@ -244,7 +245,7 @@ class App:
             "only_newer_than_days": int(d["only_newer_than_days"] or 0),
             "campaign_url": d["campaign_url"], "required_hashtags": d["required_hashtags"].split(),
             "extra_hashtags": d["extra_hashtags"].split(), "clips_per_video": int(d["clips_per_video"] or 5),
-            "notes_for_ai": d["notes_for_ai"],
+            "notes_for_ai": d["notes_for_ai"], "caption_extra": d["caption_extra"],
         }
         lst = self.agent.settings["sources"]
         sel = self.src_list.curselection()
