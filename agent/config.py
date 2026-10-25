@@ -78,6 +78,7 @@ DEFAULTS = {
         "max_posts_per_day": 5,
         "quiet_hours_start": 0,       # no posting from 00:00 ...
         "quiet_hours_end": 5,         # ... until 05:00 (local time)
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
         "browser": "opera_gx",        # opera_gx | edge | chrome | full path to a Chromium-based browser .exe
         "headless": False,
         "submit_to_content_rewards": True,
@@ -87,6 +88,7 @@ DEFAULTS = {
     "ntfy": {
         "server": "https://ntfy.sh",
         "topic": "",                  # generated on first run; the phone app uses the same topic
+        "pair_code": "",              # generated on first run; encrypts sign-ins sent from the phone (never sent over ntfy)
         "token": "",                  # optional access token for a protected / self-hosted server
         "notify_level": "normal",     # "quiet" | "normal" | "verbose"
     },
@@ -108,7 +110,7 @@ DEFAULTS = {
     },
 }
 
-SECRET_KEYS = {"gemini_api_key", "openrouter_api_key", "openai_compatible_api_key", "token"}
+SECRET_KEYS = {"gemini_api_key", "openrouter_api_key", "openai_compatible_api_key", "token", "pair_code"}
 
 _lock = threading.RLock()
 
@@ -137,8 +139,16 @@ class Settings:
                         self.data = _merge(DEFAULTS, json.load(f))
                 except Exception:
                     pass
+            changed = False
             if not self.data["ntfy"].get("topic"):
                 self.data["ntfy"]["topic"] = "clipcartel-" + secrets.token_hex(6)
+                changed = True
+            if not self.data["ntfy"].get("pair_code"):
+                alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+                code = "".join(secrets.choice(alphabet) for _ in range(8))
+                self.data["ntfy"]["pair_code"] = code[:4] + "-" + code[4:]
+                changed = True
+            if changed:
                 self.save()
 
     def save(self):

@@ -8,6 +8,10 @@ from .tools import ffmpeg_path
 def _ydl(opts):
     import yt_dlp
     base = {"quiet": True, "no_warnings": True, "noprogress": True, "ffmpeg_location": ffmpeg_path()}
+    from .config import data_dir
+    cookies = os.path.join(data_dir(), "youtube_cookies.txt")
+    if os.path.exists(cookies):
+        base["cookiefile"] = cookies
     base.update(opts)
     return yt_dlp.YoutubeDL(base)
 

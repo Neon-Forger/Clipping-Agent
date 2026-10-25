@@ -68,12 +68,14 @@ class MainActivity : Activity() {
                 .put("topic", p.getString("topic", ""))
                 .put("token", p.getString("token", ""))
                 .put("notify", p.getBoolean("notify", true))
+                .put("pair", p.getString("pair", ""))
                 .toString()
         }
 
         @JavascriptInterface
-        fun saveConfig(server: String, topic: String, token: String, notify: Boolean) {
+        fun saveConfig(server: String, topic: String, token: String, notify: Boolean, pair: String) {
             Prefs.get(this@MainActivity).edit()
+                .putString("pair", pair.trim())
                 .putString("server", server.trim().trimEnd('/'))
                 .putString("topic", topic.trim())
                 .putString("token", token.trim())
@@ -95,5 +97,10 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun version(): String = BuildConfig.VERSION_NAME
+
+        @JavascriptInterface
+        fun openLogin(service: String) {
+            startActivity(Intent(this@MainActivity, LoginActivity::class.java).putExtra("service", service))
+        }
     }
 }

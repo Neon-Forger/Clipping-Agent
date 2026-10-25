@@ -62,6 +62,7 @@
       <p class="muted">On the PC, open Clip Cartel Agent → Accounts &amp; Phone. Copy the topic shown there.</p>
       <label>ntfy server</label><input id="cServer" value="https://ntfy.sh">
       <label>Topic</label><input id="cTopic" placeholder="clipcartel-xxxxxxxxxxxx" autocapitalize="off" autocorrect="off">
+      <label>Pairing code (shown under the topic on the PC; needed to sign in from the phone)</label><input id="cPair" placeholder="ABCD-1234" autocapitalize="characters" autocorrect="off">
       <label>Access token (only if your server needs one)</label><input id="cToken" autocapitalize="off">
       <label><input type="checkbox" id="cNotify" checked style="width:auto"> Notifications when the app is closed (checked every 15 min)</label>
       <br><button class="red" onclick="saveConnect()" style="width:100%">Connect</button>
@@ -123,6 +124,16 @@
   <!-- SETTINGS -->
   <section id="settings" class="hide">
     <div class="card">
+      <div class="task" style="font-size:16px">Accounts (sign in from this phone)</div>
+      <p class="muted">Sign in here and the PC agent gets the sign-in, encrypted with your pairing code. Use the same TikTok account that's linked on Content Rewards.</p>
+      <div class="grid2">
+        <button class="red" onclick="login('tiktok')">TikTok</button>
+        <button class="red" onclick="login('contentrewards')">Content Rewards</button>
+        <button onclick="login('youtube')">YouTube (optional)</button>
+        <button onclick="cmd('status')">Check status</button>
+      </div>
+    </div>
+    <div class="card">
       <div class="row"><button class="red" onclick="cmd('settings')">Load settings from PC</button></div>
       <p class="muted">Changes are sent to the PC right away. API keys show only their last 4 characters.</p>
       <div id="setForm"><p class="muted">Tap “Load settings from PC”.</p></div>
@@ -159,14 +170,14 @@ function base() { return cfg.server.replace(/\/$/, "") + "/" + cfg.topic; }
 function show(name) {
   for (const s of ["connect","home","feed","control","settings"]) $(s).classList.toggle("hide", s !== name);
   for (const [n, id] of [["home","nHome"],["feed","nFeed"],["control","nControl"],["settings","nSettings"]]) $(id).classList.toggle("on", n === name);
-  if (name === "connect") { $("cServer").value = cfg.server; $("cTopic").value = cfg.topic; $("cToken").value = cfg.token || ""; $("cNotify").checked = cfg.notify !== false; }
+  if (name === "connect") { $("cServer").value = cfg.server; $("cTopic").value = cfg.topic; $("cToken").value = cfg.token || ""; $("cPair").value = cfg.pair || ""; $("cNotify").checked = cfg.notify !== false; }
   window.scrollTo(0, 0);
 }
 
 function saveConnect() {
-  cfg = { server: $("cServer").value.trim().replace(/\/$/, "") || "https://ntfy.sh", topic: $("cTopic").value.trim(), token: $("cToken").value.trim(), notify: $("cNotify").checked };
+  cfg = { server: $("cServer").value.trim().replace(/\/$/, "") || "https://ntfy.sh", topic: $("cTopic").value.trim(), token: $("cToken").value.trim(), notify: $("cNotify").checked, pair: $("cPair").value.trim().toUpperCase() };
   if (!cfg.topic) { toast("Enter the topic from the PC app"); return; }
-  if (hasAndroid) Android.saveConfig(cfg.server, cfg.topic, cfg.token, cfg.notify); else localStorage.setItem("cfg", JSON.stringify(cfg));
+  if (hasAndroid) Android.saveConfig(cfg.server, cfg.topic, cfg.token, cfg.notify, cfg.pair); else localStorage.setItem("cfg", JSON.stringify(cfg));
   seen = new Set(); msgs = []; renderFeed();
   start(); show("home"); cmd("state", true);
 }
@@ -182,6 +193,10 @@ async function cmd(text, quiet) {
 function sendFree() { const v = $("free").value.trim(); if (v) { cmd(v); $("free").value = ""; show("feed"); } }
 function clipLink() { const u = $("clipUrl").value.trim(); if (!u) return; cmd("clip " + u + " " + ($("clipN").value || 5)); $("clipUrl").value = ""; }
 function askAI() { const q = prompt("Ask the agent's AI:"); if (q) { cmd("ask " + q); show("feed"); } }
+function login(service) {
+  if (!cfg.topic || !cfg.pair) { toast("Add the pairing code from the PC first"); show("connect"); return; }
+  if (hasAndroid) Android.openLogin(service); else toast("Open this in the Android app");
+}
 function togglePause() { cmd(state && state.paused ? "resume" : "pause"); }
 
 function handle(m, live) {
@@ -201,7 +216,8 @@ function handle(m, live) {
 function renderState() {
   if (!state) return;
   $("task").textContent = (state.paused ? "⏸ Paused · " : "▶ ") + (state.task || "idle");
-  $("next").textContent = "Next post: " + (state.next_post || "when a clip is ready");
+  $("next").innerHTML = "Next post: " + esc(state.next_post || "when a clip is ready") +
+    (state.signin_needed ? '<br><span class="warn">🔒 Sign-in needed: Settings → Accounts → TikTok / Content Rewards</span>' : "");
   $("sReady").textContent = state.ready ?? "–"; $("sPosted").textContent = state.posted ?? "–";
   $("sSub").textContent = state.submitted ?? "–"; $("sFail").textContent = state.failed ?? "–";
   $("pauseBtn").textContent = state.paused ? "Resume" : "Pause";

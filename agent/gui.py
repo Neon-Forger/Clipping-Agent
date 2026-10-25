@@ -368,7 +368,7 @@ class App:
     def _tab_accounts(self, f):
         c1 = ttk.Frame(f, style="Card.TFrame", padding=16)
         c1.pack(fill="x", padx=6, pady=10)
-        ttk.Label(c1, text="1. Sign in (once)", style="Big.TLabel").pack(anchor="w")
+        ttk.Label(c1, text="1. Sign in (once): easiest from the phone app → Accounts", style="Big.TLabel").pack(anchor="w")
         ttk.Label(c1, text="Opens the agent's own Opera GX window (separate from your normal Opera profile) with TikTok and Content Rewards. Sign in to both, then close the window.\n"
                            "Use the same TikTok account you linked on Content Rewards (@clipping_cartel_1).",
                   style="Card.TLabel").pack(anchor="w", pady=6)
@@ -387,6 +387,10 @@ class App:
         tk.Entry(row, textvariable=self.topic_var, bg="#202026", fg=YEL, relief="flat", font=("Consolas", 16), width=30,
                  readonlybackground="#202026", state="readonly").pack(side="left")
         ttk.Button(row, text="Copy", command=lambda: (self.root.clipboard_clear(), self.root.clipboard_append(n["topic"]))).pack(side="left", padx=8)
+        row2 = ttk.Frame(c2, style="Card.TFrame")
+        row2.pack(anchor="w", fill="x", pady=(8, 0))
+        tk.Label(row2, text="Pairing code (for signing in from your phone):  ", bg=PANEL, fg=MUTED, font=("Segoe UI", 11)).pack(side="left")
+        tk.Label(row2, text=n.get("pair_code", ""), bg=PANEL, fg=YEL, font=("Consolas", 18, "bold")).pack(side="left")
         b = ttk.Frame(c2, style="Card.TFrame")
         b.pack(anchor="w", pady=8)
         ttk.Button(b, text="Send test notification", command=lambda: self.agent.ntfy.send("If you can read this, your phone is connected ✅",
@@ -405,6 +409,8 @@ class App:
         def go():
             try:
                 poster.open_for_login(self.agent.settings["posting"], ["https://www.tiktok.com/login", "https://contentrewards.com/c/home"])
+                self.agent.state.pop("signin_needed", None)
+                self.agent.save_state()
                 self.agent.log("info", "Sign-in window closed")
             except Exception as e:
                 self.agent.log("error", f"Couldn't open the browser: {e}. Check the browser setting in Settings → Posting.")

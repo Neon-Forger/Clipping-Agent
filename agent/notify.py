@@ -80,6 +80,13 @@ class Ntfy:
                         self._handled.add(msg.get("id"))
                         state_store["last_cmd_time"] = msg.get("time") or time.time()
                         text = (msg.get("message") or "").strip()
+                        att = msg.get("attachment") or {}
+                        if att.get("url"):
+                            try:
+                                text = requests.get(att["url"], headers=self._headers(), timeout=30).text.strip()
+                            except Exception as e:
+                                self.log("warn", f"Couldn't download a long message from the phone: {e}")
+                                continue
                         if text:
                             try:
                                 on_command(text)

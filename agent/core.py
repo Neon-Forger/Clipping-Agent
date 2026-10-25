@@ -98,13 +98,15 @@ class Agent:
             "next_post": nxt.strftime("%a %I:%M %p") if nxt else None,
             "videos": len(self.db.q("SELECT id FROM videos")),
             "updated": dt.datetime.now().strftime("%I:%M %p"),
+            "signin_needed": bool(self.state.get("signin_needed")),
         }
 
     def status_text(self):
         s = self.status()
         return (f"{'⏸ Paused' if s['paused'] else '▶ Running'} · now: {s['task']}\n"
                 f"Clips ready: {s['ready']} · posted: {s['posted']} · submitted: {s['submitted']} · failed: {s['failed']}\n"
-                f"Next post: {s['next_post'] or 'when a clip is ready'}")
+                f"Next post: {s['next_post'] or 'when a clip is ready'}"
+                + ("\n🔒 Posting is waiting for a TikTok / Content Rewards sign-in." if s["signin_needed"] else ""))
 
     def push_state(self):
         self.ntfy.send_data("state", self.status())
@@ -227,8 +229,11 @@ class Agent:
             if v["status"] == "transcribed":
                 self._select_and_render(v, src, work)
         except ai.NoAIKey as e:
-            self.log("warn", str(e), notify=True, title="🔑 AI key needed", tags=["key"], priority=4)
-            self.settings.set("paused", True)
+            # keep the video waiting (downloaded + transcribed); tell the owner once
+            if not self.state.get("ai_key_warned"):
+                self.state["ai_key_warned"] = True
+                self.save_state()
+                self.log("warn", str(e), notify=True, title="🔑 AI key needed", tags=["key"], priority=4)
         except Exception as e:
             self.db.update_video(v["id"], status="failed", error=str(e)[:500])
             self.log("error", f"Failed on {v['title']}: {e}", notify=True, title="⚠️ Video failed", tags=["warning"])
@@ -244,6 +249,8 @@ class Agent:
         done = [f"{int(c['start'] // 60)}:{int(c['start'] % 60):02d}-{int(c['end'] // 60)}:{int(c['end'] % 60):02d}"
                 for c in self.db.q("SELECT start, end FROM clips WHERE video_id=?", (v["id"],))]
         picks = ai.select_moments(self.settings["ai"], edit, src, v, transcribe.transcript_for_ai(tr), n, avoid=done)
+        if self.state.pop("ai_key_warned", None):
+            self.save_state()
         prev = [(c["start"], c["end"]) for c in self.db.q("SELECT start, end FROM clips WHERE video_id=?", (v["id"],))]
         picks = [c for c in picks if all(c["end"] <= a or c["start"] >= b for a, b in prev)]
         # drop overlaps
@@ -316,7 +323,7 @@ class Agent:
     def _poster_loop(self):
         while not self._stop.is_set():
             try:
-                if not self.paused:
+                if not self.paused and not self.state.get("signin_needed"):
                     nxt = self.next_post_time()
                     if self.post_now_requested or (nxt and dt.datetime.now() >= nxt):
                         self.post_now_requested = False
@@ -327,6 +334,12 @@ class Agent:
             self._stop.wait(30)
 
     def post_next(self, cid=None):
+        try:
+            self._post_next(cid)
+        finally:
+            self.set_task("idle")
+
+    def _post_next(self, cid=None):
         clip = self.db.clip(cid) if cid else (self.db.clips("rendered", 1) or [None])[0]
         if not clip:
             self.log("info", "No clips ready to post", notify=True, title="📭 Nothing to post")
@@ -341,8 +354,10 @@ class Agent:
                 url = poster.post_to_tiktok(clip["file"], clip["caption"], p, sel, self.log)
             except poster.NotLoggedIn as e:
                 self.db.update_clip(clip["id"], status="rendered")
-                self.settings.set("paused", True)
-                self.log("error", str(e), notify=True, title="🔒 Sign-in needed", tags=["lock"], priority=5)
+                self.state["signin_needed"] = True
+                self.save_state()
+                self.log("error", str(e) + " Sign in from the phone app (Settings → Accounts).",
+                         notify=True, title="🔒 Sign-in needed", tags=["lock"], priority=5)
                 return
             except Exception as e:
                 self.db.update_clip(clip["id"], status="failed", error=str(e)[:500])
@@ -366,7 +381,10 @@ class Agent:
                                  title="✅ Submitted for payout", tags=["white_check_mark", "moneybag"])
                         break
                     except poster.NotLoggedIn as e:
-                        self.log("error", str(e), notify=True, title="🔒 Sign-in needed", tags=["lock"], priority=5)
+                        self.state["signin_needed"] = True
+                        self.save_state()
+                        self.log("error", str(e) + f" Submit this link by hand within 30 min: {url}",
+                                 notify=True, title="🔒 Content Rewards sign-in needed", tags=["lock"], priority=5)
                         break
                     except Exception as e:
                         self.log("warn", f"Submit attempt {attempt + 1} failed: {e}")
@@ -380,7 +398,10 @@ class Agent:
 
     # ---------------------------------------------------------------- commands
     def handle_command(self, text):
-        self.log("info", f"📱 Command: {text}")
+        shown = "login (sign-in from phone)" if text.lower().startswith("login ") else (text if len(text) < 120 else text[:117] + "...")
+        if text.lower().startswith("set ") and any(k in text for k in ("api_key", "token", "pair_code")):
+            shown = text.split(" ")[0] + " " + text.split(" ")[1] + " (hidden)"
+        self.log("info", f"📱 Command: {shown}")
         reply = self.run_command(text)
         if reply:
             self.ntfy.send(reply, title="🤖 Agent", tags=["robot"])
@@ -412,6 +433,7 @@ class Agent:
             if arg.isdigit():
                 threading.Thread(target=self.post_next, args=(int(arg),), daemon=True).start()
             else:
+                self.state.pop("signin_needed", None)
                 self.post_now_requested = True
             return "📤 Posting the next clip now."
         if cmd == "list":
@@ -477,9 +499,44 @@ class Agent:
             return f"✔ Removed {gone.get('name')}."
         if cmd == "ask":
             return self._ask_ai(arg)
+        if cmd == "login":
+            threading.Thread(target=self._phone_login, args=(arg,), daemon=True).start()
+            return None
         if allow_ai:
             return self._natural_language(text)
         return f"Unknown command: {cmd}. Send 'help'."
+
+    def _phone_login(self, blob):
+        from . import crypto
+        try:
+            data = crypto.decrypt(blob, self.settings["ntfy"]["pair_code"])
+        except Exception:
+            self.log("error", "A sign-in from the phone couldn't be read. Check the pairing code in the phone app matches "
+                              "the one in Accounts & Phone on the PC.", notify=True, title="🔒 Sign-in failed", priority=4)
+            return
+        service = data.get("service", "")
+        name = {"tiktok": "TikTok", "contentrewards": "Content Rewards", "youtube": "YouTube"}.get(service, service)
+        if data.get("ua"):
+            self.settings.set("posting.user_agent", data["ua"])
+        try:
+            if service == "youtube":
+                from .poster import write_netscape_cookies
+                write_netscape_cookies(data.get("cookies", ""), ".youtube.com", os.path.join(data_dir(), "youtube_cookies.txt"))
+                res = "saved ✅ (used for downloading)"
+            else:
+                with self.browser_lock:
+                    self.set_task(f"saving {name} sign-in")
+                    res = poster.import_cookies(service, data.get("cookies", ""), self.settings["posting"], self.log)
+            ok = "✅" in res
+            self.log("info" if ok else "warn", f"{name} sign-in from phone: {res}", notify=True,
+                     title=("✅ " if ok else "⚠️ ") + f"{name} sign-in", priority=3 if ok else 4)
+            if ok and service in ("tiktok", "contentrewards") and self.state.pop("signin_needed", None):
+                self.save_state()
+                self.log("info", "Posting is back on.", notify=True, title="🤖 Agent")
+        except Exception as e:
+            self.log("error", f"Couldn't save the {name} sign-in: {e}", notify=True, title="⚠️ Sign-in failed", priority=4)
+        finally:
+            self.set_task("idle")
 
     def _clip_url(self, url, n):
         try:

@@ -51,6 +51,7 @@ def _launch(p, posting_cfg, headless=None, log=None):
     want = (posting_cfg.get("browser") or "opera_gx").strip()
     base = dict(headless=posting_cfg.get("headless", False) if headless is None else headless,
                 viewport={"width": 1366, "height": 900},
+                user_agent=posting_cfg.get("user_agent") or None,
                 args=["--disable-blink-features=AutomationControlled", "--mute-audio"])
     attempts = []
     if want.lower() in ("opera_gx", "opera", "operagx"):
@@ -79,24 +80,100 @@ def _human_pause(a=0.6, b=1.6):
     time.sleep(random.uniform(a, b))
 
 
-def open_for_login(posting_cfg, urls):
-    """Opens the agent's browser so you can sign in. Returns when you close the window."""
+def open_for_login(posting_cfg, urls, max_minutes=20):
+    """Opens the agent's browser so you can sign in. Returns when you close the window
+    (or after `max_minutes`, so the browser is never blocked forever)."""
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
         ctx = _launch(p, posting_cfg, headless=False)
+        closed = {"v": False}
+        ctx.on("close", lambda *_: closed.update(v=True))
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.goto(urls[0])
         for u in urls[1:]:
             ctx.new_page().goto(u)
-        while True:
+        end = time.time() + max_minutes * 60
+        while time.time() < end and not closed["v"]:
             try:
-                if not ctx.pages:
+                if not [pg for pg in ctx.pages if not pg.is_closed()]:
                     break
                 time.sleep(1)
             except Exception:
                 break
         try:
             ctx.close()
+        except Exception:
+            pass
+
+
+COOKIE_DOMAINS = {
+    "tiktok": [".tiktok.com"],
+    "contentrewards": [".contentrewards.com"],
+    "youtube": [".youtube.com"],
+    "google": [".google.com"],
+}
+CHECK_URLS = {
+    "tiktok": ("https://www.tiktok.com/tiktokstudio/content", "login"),
+    "contentrewards": ("https://contentrewards.com/c/home", "login"),
+}
+
+
+def _parse_cookie_header(header, domain):
+    out = []
+    for part in header.split(";"):
+        if "=" not in part:
+            continue
+        name, _, value = part.strip().partition("=")
+        if not name:
+            continue
+        out.append({"name": name, "value": value, "domain": domain, "path": "/", "secure": True,
+                    "httpOnly": False, "sameSite": "Lax", "expires": time.time() + 60 * 86400})
+    return out
+
+
+def import_cookies(service, cookie_header, posting_cfg, log):
+    """Puts cookies captured on the phone into the agent's browser profile and checks the sign-in worked.
+    Returns a short status string."""
+    from playwright.sync_api import sync_playwright
+    domains = COOKIE_DOMAINS.get(service, [])
+    cookies = [c for d in domains for c in _parse_cookie_header(cookie_header, d)]
+    if not cookies:
+        raise RuntimeError("No cookies were received. Make sure you finished signing in before tapping Send.")
+    with sync_playwright() as p:
+        ctx = _launch(p, posting_cfg, headless=True, log=log)
+        try:
+            ctx.add_cookies(cookies)
+            if service in CHECK_URLS:
+                url, bad = CHECK_URLS[service]
+                page = ctx.pages[0] if ctx.pages else ctx.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                time.sleep(5)
+                if bad in page.url:
+                    return f"cookies saved, but {service} still shows the sign-in page"
+                return "signed in ✅"
+            return "saved ✅"
+        finally:
+            ctx.close()
+
+
+def write_netscape_cookies(cookie_header, domain, path):
+    lines = ["# Netscape HTTP Cookie File"]
+    exp = int(time.time() + 60 * 86400)
+    for c in _parse_cookie_header(cookie_header, domain):
+        lines.append("\t".join([domain, "TRUE", "/", "TRUE", str(exp), c["name"], c["value"]]))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def _dismiss_popups(page):
+    """Closes TikTok's 'new feature' / tips pop-ups that can block clicks."""
+    for label in ("Got it", "Not now", "Skip", "Close", "OK"):
+        try:
+            b = page.get_by_role("button", name=label, exact=True)
+            for i in range(min(b.count(), 3)):
+                if b.nth(i).is_visible():
+                    b.nth(i).click(timeout=2000)
+                    time.sleep(0.5)
         except Exception:
             pass
 
@@ -143,6 +220,7 @@ def post_to_tiktok(video_path, caption, posting_cfg, sel, log):
                 raise RuntimeError("TikTok upload did not finish within 15 minutes")
             _human_pause(1.5, 3)
 
+            _dismiss_popups(page)
             # caption
             ed = page.locator(sel["tiktok_caption_editor"]).first
             ed.click()
@@ -167,6 +245,7 @@ def post_to_tiktok(video_path, caption, posting_cfg, sel, log):
             page.keyboard.press("Escape")
             _human_pause(2, 4)
 
+            _dismiss_popups(page)
             # wait for the post button to be usable, then post
             btn = page.locator(sel["tiktok_post_button"]).first
             for _ in range(60):
