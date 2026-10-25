@@ -321,7 +321,7 @@ class App:
         ttk.Button(b, text="Save settings", command=self._save_settings, style="Accent.TButton").pack(side="left")
         ttk.Button(b, text="Edit all settings (settings.json)", command=lambda: open_path(self.agent.settings.path)).pack(side="left", padx=8)
         ttk.Button(b, text="Reload settings.json", command=self._reload).pack(side="left")
-        ttk.Button(b, text="Open app source folder", command=lambda: open_path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))).pack(side="left", padx=8)
+        ttk.Button(b, text="Open app source folder", command=lambda: open_path(os.path.join(os.path.dirname(sys.executable), "source") if getattr(sys, "frozen", False) else os.path.dirname(os.path.dirname(os.path.abspath(__file__))))).pack(side="left", padx=8)
 
     def _save_settings(self):
         for key, (v, kind) in self.set_vars.items():

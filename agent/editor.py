@@ -99,7 +99,7 @@ def build_ass(clip, words, cfg, dramatic, path):
             if big_words and (w["s"] - big_words[-1]["e"] > 0.35 or w["s"] > P + 1.5):
                 break
             big_words.append(w)
-            if len(big_words) >= 4 or w["w"].endswith((".", "?", "!")):
+            if len(big_words) >= 6 or w["w"].endswith((".", "?", "!")):
                 break
 
     ev = []

@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Clip Cartel</title>
+<style>
+  :root { --bg:#0B0B0C; --panel:#16161A; --panel2:#202026; --text:#F2F2F2; --muted:#9A9AA5; --red:#E5252A; --yel:#FFD400; --green:#3DDC84; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { position:sticky; top:0; z-index:5; background:var(--bg); padding:14px 16px 10px; display:flex; align-items:center; gap:10px; border-bottom:1px solid #1e1e24; }
+  header .logo { font-weight:900; letter-spacing:1px; font-size:20px; }
+  header .logo b { color:var(--red); }
+  header .dot { width:10px; height:10px; border-radius:50%; background:var(--muted); margin-left:auto; }
+  header .dot.on { background:var(--green); box-shadow:0 0 10px var(--green); }
+  header .dot.paused { background:var(--yel); }
+  main { padding:12px 14px 96px; }
+  .card { background:var(--panel); border-radius:16px; padding:14px; margin-bottom:12px; }
+  .row { display:flex; gap:10px; }
+  .row > * { flex:1; }
+  .stat { background:var(--panel); border-radius:14px; padding:10px 12px; }
+  .stat .n { font-size:26px; font-weight:900; color:var(--yel); }
+  .stat .l { color:var(--muted); font-size:12px; }
+  .task { font-size:18px; font-weight:800; }
+  .muted { color:var(--muted); font-size:13px; }
+  button { background:var(--panel2); color:var(--text); border:0; border-radius:12px; padding:12px 14px; font-weight:700; font-size:14px; }
+  button.red { background:var(--red); color:#fff; }
+  button:active { transform:scale(.97); }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  input, textarea, select { width:100%; background:var(--panel2); color:var(--text); border:1px solid #2c2c34; border-radius:10px; padding:11px 12px; font-size:15px; }
+  textarea { min-height:90px; font-family: ui-monospace, monospace; font-size:13px; }
+  label { display:block; color:var(--muted); font-size:12px; margin:10px 0 4px; }
+  .msg { border-left:3px solid var(--red); padding:8px 10px; margin:8px 0; background:var(--panel); border-radius:0 10px 10px 0; }
+  .msg .t { font-weight:800; }
+  .msg .b { white-space:pre-wrap; word-break:break-word; }
+  .msg .time { color:var(--muted); font-size:11px; }
+  .msg a { color:var(--yel); }
+  nav { position:fixed; bottom:0; left:0; right:0; display:flex; background:#111114; border-top:1px solid #1e1e24; padding-bottom:env(safe-area-inset-bottom); }
+  nav button { flex:1; background:none; border-radius:0; color:var(--muted); padding:14px 0 16px; font-size:12px; }
+  nav button.on { color:var(--red); }
+  .hide { display:none !important; }
+  .toast { position:fixed; left:50%; bottom:86px; transform:translateX(-50%); background:#2a2a31; padding:10px 16px; border-radius:20px; font-size:13px; opacity:0; transition:.25s; pointer-events:none; }
+  .toast.show { opacity:1; }
+  .kv { display:flex; align-items:center; gap:8px; margin:8px 0; }
+  .kv span { flex:1.2; font-size:13px; color:var(--muted); word-break:break-word; }
+  .kv input, .kv select { flex:1; padding:8px 10px; }
+  h3 { margin:16px 0 6px; color:var(--red); font-size:14px; text-transform:uppercase; letter-spacing:1px; }
+  .warn { color:var(--yel); }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">CLIP <b>CARTEL</b></div>
+  <div class="dot" id="dot"></div>
+</header>
+
+<main>
+  <!-- CONNECT -->
+  <section id="connect" class="hide">
+    <div class="card">
+      <div class="task">Connect to your PC agent</div>
+      <p class="muted">On the PC, open Clip Cartel Agent → Accounts &amp; Phone. Copy the topic shown there.</p>
+      <label>ntfy server</label><input id="cServer" value="https://ntfy.sh">
+      <label>Topic</label><input id="cTopic" placeholder="clipcartel-xxxxxxxxxxxx" autocapitalize="off" autocorrect="off">
+      <label>Access token (only if your server needs one)</label><input id="cToken" autocapitalize="off">
+      <label><input type="checkbox" id="cNotify" checked style="width:auto"> Notifications when the app is closed (checked every 15 min)</label>
+      <br><button class="red" onclick="saveConnect()" style="width:100%">Connect</button>
+    </div>
+  </section>
+
+  <!-- HOME -->
+  <section id="home">
+    <div class="card">
+      <div class="task" id="task">Waiting for the agent...</div>
+      <div class="muted" id="next"></div>
+      <div class="muted" id="seen"></div>
+    </div>
+    <div class="grid2" style="margin-bottom:12px">
+      <div class="stat"><div class="n" id="sReady">–</div><div class="l">Clips ready</div></div>
+      <div class="stat"><div class="n" id="sPosted">–</div><div class="l">Posted</div></div>
+      <div class="stat"><div class="n" id="sSub">–</div><div class="l">Submitted for $</div></div>
+      <div class="stat"><div class="n" id="sFail">–</div><div class="l">Failed</div></div>
+    </div>
+    <div class="grid2">
+      <button class="red" id="pauseBtn" onclick="togglePause()">Pause</button>
+      <button onclick="cmd('status')">Refresh</button>
+      <button onclick="cmd('run')">Check for videos</button>
+      <button onclick="if(confirm('Post the next clip now?')) cmd('post')">Post next now</button>
+    </div>
+    <h3>Latest</h3>
+    <div id="latest"></div>
+  </section>
+
+  <!-- FEED -->
+  <section id="feed" class="hide"><div id="feedList"></div></section>
+
+  <!-- CONTROL -->
+  <section id="control" class="hide">
+    <div class="card">
+      <label>Tell the agent what to do (plain English works if an AI key is set)</label>
+      <textarea id="free" placeholder="e.g. post only 3 a day and focus on Bert's craziest stories"></textarea><br><br>
+      <button class="red" onclick="sendFree()" style="width:100%">Send</button>
+    </div>
+    <div class="card">
+      <label>Clip a specific video</label>
+      <input id="clipUrl" placeholder="https://youtube.com/watch?v=..." autocapitalize="off">
+      <label>How many clips</label><input id="clipN" type="number" value="5">
+      <br><br><button onclick="clipLink()" style="width:100%">Start clipping</button>
+    </div>
+    <div class="card">
+      <label>Extra instructions for the AI editor</label>
+      <textarea id="prompt" placeholder="e.g. only pick moments under 45s with a big laugh at the end"></textarea><br><br>
+      <div class="row"><button onclick="cmd('prompt '+document.getElementById('prompt').value)">Save</button><button onclick="cmd('prompt clear')">Clear</button></div>
+    </div>
+    <div class="grid2">
+      <button onclick="cmd('list')">Clips waiting</button>
+      <button onclick="cmd('sources')">Sources</button>
+      <button onclick="cmd('help')">All commands</button>
+      <button onclick="askAI()">Ask the AI</button>
+    </div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="settings" class="hide">
+    <div class="card">
+      <div class="row"><button class="red" onclick="cmd('settings')">Load settings from PC</button></div>
+      <p class="muted">Changes are sent to the PC right away. API keys show only their last 4 characters.</p>
+      <div id="setForm"><p class="muted">Tap “Load settings from PC”.</p></div>
+    </div>
+    <div class="card">
+      <div class="task" style="font-size:15px">Phone connection</div>
+      <p class="muted" id="connInfo"></p>
+      <button onclick="show('connect')">Change server / topic</button>
+    </div>
+    <p class="muted" id="ver"></p>
+  </section>
+</main>
+
+<nav>
+  <button id="nHome" class="on" onclick="show('home')">● Home</button>
+  <button id="nFeed" onclick="show('feed')">≡ Activity</button>
+  <button id="nControl" onclick="show('control')">⚡ Control</button>
+  <button id="nSettings" onclick="show('settings')">⚙ Settings</button>
+</nav>
+<div class="toast" id="toast"></div>
+
+<script>
+const hasAndroid = typeof Android !== "undefined";
+let cfg = hasAndroid ? JSON.parse(Android.getConfig()) : JSON.parse(localStorage.getItem("cfg") || '{"server":"https://ntfy.sh","topic":"","token":"","notify":true}');
+let seen = new Set(), msgs = [], state = null, lastStateAt = 0, es = null, pollTimer = null, lastId = "";
+
+const $ = id => document.getElementById(id);
+function toast(t) { const el = $("toast"); el.textContent = t; el.classList.add("show"); setTimeout(() => el.classList.remove("show"), 1800); }
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function linkify(s) { return esc(s).replace(/(https?:\/\/[^\s]+)/g, '<a href="$1">$1</a>'); }
+function headers() { return cfg.token ? {"Authorization": "Bearer " + cfg.token} : {}; }
+function base() { return cfg.server.replace(/\/$/, "") + "/" + cfg.topic; }
+
+function show(name) {
+  for (const s of ["connect","home","feed","control","settings"]) $(s).classList.toggle("hide", s !== name);
+  for (const [n, id] of [["home","nHome"],["feed","nFeed"],["control","nControl"],["settings","nSettings"]]) $(id).classList.toggle("on", n === name);
+  if (name === "connect") { $("cServer").value = cfg.server; $("cTopic").value = cfg.topic; $("cToken").value = cfg.token || ""; $("cNotify").checked = cfg.notify !== false; }
+  window.scrollTo(0, 0);
+}
+
+function saveConnect() {
+  cfg = { server: $("cServer").value.trim().replace(/\/$/, "") || "https://ntfy.sh", topic: $("cTopic").value.trim(), token: $("cToken").value.trim(), notify: $("cNotify").checked };
+  if (!cfg.topic) { toast("Enter the topic from the PC app"); return; }
+  if (hasAndroid) Android.saveConfig(cfg.server, cfg.topic, cfg.token, cfg.notify); else localStorage.setItem("cfg", JSON.stringify(cfg));
+  seen = new Set(); msgs = []; renderFeed();
+  start(); show("home"); cmd("state", true);
+}
+
+async function cmd(text, quiet) {
+  if (!cfg.topic) { show("connect"); return; }
+  try {
+    const r = await fetch(base() + "-cmd", { method: "POST", body: text, headers: headers() });
+    if (!r.ok) throw new Error(r.status);
+    if (!quiet) toast("Sent ✓");
+  } catch (e) { toast("Couldn't send: " + e.message); }
+}
+function sendFree() { const v = $("free").value.trim(); if (v) { cmd(v); $("free").value = ""; show("feed"); } }
+function clipLink() { const u = $("clipUrl").value.trim(); if (!u) return; cmd("clip " + u + " " + ($("clipN").value || 5)); $("clipUrl").value = ""; }
+function askAI() { const q = prompt("Ask the agent's AI:"); if (q) { cmd("ask " + q); show("feed"); } }
+function togglePause() { cmd(state && state.paused ? "resume" : "pause"); }
+
+function handle(m, live) {
+  if (!m || m.event !== "message" || seen.has(m.id)) return;
+  seen.add(m.id); lastId = m.id;
+  if (hasAndroid && live) Android.setLastSeen(m.id);
+  const title = m.title || "";
+  if (title === "__state__") { try { state = JSON.parse(m.message); lastStateAt = m.time * 1000; renderState(); } catch (e) {} return; }
+  if (title === "__settings__") { try { renderSettings(JSON.parse(m.message)); } catch (e) { toast("Settings too big to show"); } return; }
+  if (title.startsWith("__")) return;
+  msgs.push(m); msgs.sort((a, b) => a.time - b.time);
+  if (msgs.length > 300) msgs.shift();
+  renderFeed();
+  if (live && document.hidden === false && m.title) toast(m.title);
+}
+
+function renderState() {
+  if (!state) return;
+  $("task").textContent = (state.paused ? "⏸ Paused · " : "▶ ") + (state.task || "idle");
+  $("next").textContent = "Next post: " + (state.next_post || "when a clip is ready");
+  $("sReady").textContent = state.ready ?? "–"; $("sPosted").textContent = state.posted ?? "–";
+  $("sSub").textContent = state.submitted ?? "–"; $("sFail").textContent = state.failed ?? "–";
+  $("pauseBtn").textContent = state.paused ? "Resume" : "Pause";
+  tickOnline();
+}
+function tickOnline() {
+  const age = (Date.now() - lastStateAt) / 60000;
+  const dot = $("dot");
+  dot.className = "dot" + (lastStateAt && age < 65 ? (state && state.paused ? " paused" : " on") : "");
+  $("seen").innerHTML = lastStateAt ? (age < 65 ? "Agent online · updated " + new Date(lastStateAt).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})
+                                                 : '<span class="warn">No word from the PC for ' + Math.round(age) + ' min. Is it on and is the agent open?</span>') : "";
+}
+function msgHtml(m) {
+  const t = new Date(m.time * 1000).toLocaleString([], {weekday:"short", hour:"numeric", minute:"2-digit"});
+  return `<div class="msg"><div class="time">${t}</div>${m.title ? `<div class="t">${esc(m.title)}</div>` : ""}<div class="b">${linkify(m.message || "")}</div></div>`;
+}
+function renderFeed() {
+  const rev = [...msgs].reverse();
+  $("feedList").innerHTML = rev.map(msgHtml).join("") || '<p class="muted">No activity yet.</p>';
+  $("latest").innerHTML = rev.slice(0, 4).map(msgHtml).join("") || '<p class="muted">No activity yet.</p>';
+}
+
+const SKIP = new Set(["sources", "selectors", "provider_order"]);
+function flatten(o, pre, out) {
+  for (const [k, v] of Object.entries(o)) {
+    const key = pre ? pre + "." + k : k;
+    if (SKIP.has(k)) continue;
+    if (v && typeof v === "object" && !Array.isArray(v)) flatten(v, key, out);
+    else out.push([key, v]);
+  }
+  return out;
+}
+function renderSettings(s) {
+  const rows = flatten(s, "", []);
+  let html = "";
+  let group = "";
+  for (const [k, v] of rows) {
+    const g = k.includes(".") ? k.split(".")[0] : "general";
+    if (g !== group) { html += `<h3>${esc(g)}</h3>`; group = g; }
+    const label = esc(k.split(".").pop().replace(/_/g, " "));
+    if (typeof v === "boolean") {
+      html += `<div class="kv"><span>${label}</span><select data-k="${esc(k)}"><option value="true"${v ? " selected" : ""}>On</option><option value="false"${!v ? " selected" : ""}>Off</option></select></div>`;
+    } else {
+      html += `<div class="kv"><span>${label}</span><input data-k="${esc(k)}" value="${esc(Array.isArray(v) ? JSON.stringify(v) : (v ?? ""))}"></div>`;
+    }
+  }
+  html += `<h3>Sources (who to clip)</h3><textarea id="srcJson" style="min-height:220px">${esc(JSON.stringify(s.sources || [], null, 1))}</textarea><br><br>
+           <button class="red" onclick="saveSources()" style="width:100%">Save sources</button>`;
+  $("setForm").innerHTML = html;
+  for (const el of $("setForm").querySelectorAll("[data-k]")) {
+    el.addEventListener("change", () => cmd("set " + el.dataset.k + " " + el.value));
+  }
+  toast("Settings loaded");
+}
+function saveSources() {
+  try { const v = JSON.parse($("srcJson").value); cmd("set sources " + JSON.stringify(v)); }
+  catch (e) { toast("That isn't valid JSON"); }
+}
+
+async function loadHistory() {
+  try {
+    const r = await fetch(base() + "/json?poll=1&since=48h", { headers: headers() });
+    const txt = await r.text();
+    for (const line of txt.split("\n")) if (line.trim()) handle(JSON.parse(line), false);
+    if (hasAndroid && lastId) Android.setLastSeen(lastId);
+  } catch (e) { toast("Can't reach " + cfg.server); }
+}
+function start() {
+  if (es) { es.close(); es = null; }
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  $("connInfo").textContent = cfg.server + " · " + cfg.topic;
+  loadHistory();
+  if (!cfg.token && typeof EventSource !== "undefined") {
+    es = new EventSource(base() + "/sse");
+    es.onmessage = e => { try { handle(JSON.parse(e.data), true); } catch (x) {} };
+  } else {
+    pollTimer = setInterval(async () => {
+      try {
+        const r = await fetch(base() + "/json?poll=1&since=" + (lastId || "1m"), { headers: headers() });
+        for (const line of (await r.text()).split("\n")) if (line.trim()) handle(JSON.parse(line), true);
+      } catch (e) {}
+    }, 5000);
+  }
+}
+window.onAppResume = () => { if (cfg.topic) { loadHistory(); cmd("state", true); } };
+setInterval(tickOnline, 30000);
+if (hasAndroid) $("ver").textContent = "Clip Cartel " + Android.version();
+if (cfg.topic) { start(); setTimeout(() => cmd("state", true), 800); } else show("connect");
+</script>
+</body>
+</html>

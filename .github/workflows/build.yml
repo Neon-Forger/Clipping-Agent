@@ -1,0 +1,93 @@
+name: Build apps
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+      - name: Build APK
+        env:
+          APP_VERSION_CODE: ${{ github.run_number }}
+          KEYSTORE_FILE: ${{ github.workspace }}/android/app/clipcartel.keystore
+          KEYSTORE_PASSWORD: clipcartel
+          KEY_ALIAS: clipcartel
+          KEY_PASSWORD: clipcartel
+        run: gradle -p android assembleRelease --no-daemon --stacktrace
+      - run: cp android/app/build/outputs/apk/release/app-release.apk ClipCartel.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: ClipCartel.apk
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+      - name: Run from source self-test
+        run: python -m agent --selftest
+      - name: Package
+        run: >
+          pyinstaller --noconfirm --windowed --name ClipCartelAgent --icon assets/icon.ico
+          --add-data "assets;assets"
+          --collect-all faster_whisper --collect-all ctranslate2 --collect-all playwright
+          --collect-all imageio_ffmpeg --collect-all yt_dlp --collect-all av
+          --hidden-import tkinter run_agent.py
+      - name: Add editable source code
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/ClipCartelAgent/source | Out-Null
+          Copy-Item -Recurse agent, assets, run_agent.py, requirements.txt, README.md dist/ClipCartelAgent/source/
+          Copy-Item scripts/*.bat dist/ClipCartelAgent/source/
+      - name: Packaged self-test
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/ClipCartelAgent/ClipCartelAgent.exe -ArgumentList "--selftest" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { exit 1 }
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path dist/ClipCartelAgent -DestinationPath ClipCartelAgent-Windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: ClipCartelAgent-Windows.zip
+
+  release:
+    needs: [android, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Clip Cartel v1.0.${{ github.run_number }}
+          make_latest: true
+          body: |
+            **ClipCartelAgent-Windows.zip**: the PC agent. Unzip anywhere, open `ClipCartelAgent.exe`.
+            **ClipCartel.apk**: the phone app (Android). Install it, then enter the topic shown in the PC app.
+          files: |
+            ClipCartel.apk
+            ClipCartelAgent-Windows.zip

@@ -370,6 +370,8 @@ class Agent:
             return HELP
         if cmd == "status":
             return self.status_text()
+        if cmd == "state":
+            return None
         if cmd == "pause":
             s.set("paused", True)
             return "⏸ Paused. Send 'resume' to continue."
