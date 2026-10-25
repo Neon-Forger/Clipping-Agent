@@ -14,6 +14,7 @@ class Ntfy:
         self.settings = settings
         self.log = log or (lambda *a: None)
         self._stop = threading.Event()
+        self._handled = set()
 
     @property
     def cfg(self):
@@ -55,8 +56,11 @@ class Ntfy:
     def listen(self, on_command, state_store):
         """Blocking loop: reads commands sent from the phone and calls on_command(text)."""
         while not self._stop.is_set():
-            since = state_store.get("last_cmd_id") or "now"
-            url = f"{self.cfg['server'].rstrip('/')}/{self.cfg['topic']}-cmd/json?since={since}"
+            # resume after the last command we handled (unix time); with none, only new messages arrive
+            last_t = state_store.get("last_cmd_time")
+            url = f"{self.cfg['server'].rstrip('/')}/{self.cfg['topic']}-cmd/json"
+            if last_t:
+                url += f"?since={int(last_t) + 1}"
             try:
                 with requests.get(url, headers=self._headers(), stream=True, timeout=(15, 90)) as r:
                     r.raise_for_status()
@@ -71,7 +75,10 @@ class Ntfy:
                             continue
                         if msg.get("event") != "message":
                             continue
-                        state_store["last_cmd_id"] = msg.get("id")
+                        if msg.get("id") in self._handled:
+                            continue
+                        self._handled.add(msg.get("id"))
+                        state_store["last_cmd_time"] = msg.get("time") or time.time()
                         text = (msg.get("message") or "").strip()
                         if text:
                             try:

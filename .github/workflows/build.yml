@@ -47,6 +47,8 @@ jobs:
           pip install -r requirements.txt pyinstaller
       - name: Run from source self-test
         run: python -m agent --selftest
+      - name: Stamp build number
+        run: echo "BUILD = ${{ github.run_number }}" > agent/_build.py
       - name: Package
         run: >
           pyinstaller --noconfirm --windowed --name ClipCartelAgent --icon assets/icon.ico

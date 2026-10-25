@@ -41,6 +41,7 @@ class Agent:
         self.wake = threading.Event()
         self._stop = threading.Event()
         self.post_now_requested = False
+        self.update_url = None
         logging.basicConfig(filename=os.path.join(data_dir(), "agent.log"), level=logging.INFO,
                             format="%(asctime)s %(levelname)s %(message)s")
         self.ntfy = Ntfy(self.settings, self.log)
@@ -116,6 +117,7 @@ class Agent:
         threading.Thread(target=self.ntfy.listen, args=(self.handle_command, self._cmd_state()), daemon=True,
                          name="ntfy").start()
         threading.Thread(target=self._heartbeat, daemon=True, name="heartbeat").start()
+        threading.Thread(target=self._check_update, daemon=True, name="update").start()
         self.log("info", "Agent started", notify=True, title="🤖 Clip Cartel Agent online", tags=["robot"])
         self.push_state()
 
@@ -142,6 +144,22 @@ class Agent:
                 ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)
             except Exception:
                 pass
+
+    def _check_update(self):
+        try:
+            from ._build import BUILD
+        except Exception:
+            return  # running from source
+        try:
+            import requests
+            r = requests.get("https://api.github.com/repos/Neon-Forger/Clipping-Agent/releases/latest", timeout=20).json()
+            latest = int(str(r.get("tag_name", "v0.0.0")).rsplit(".", 1)[-1])
+            if latest > int(BUILD):
+                self.update_url = r.get("html_url")
+                self.log("warn", f"A new version (v1.0.{latest}) is out. Download it from the Accounts & Phone tab.",
+                         notify=True, title="⬆️ Agent update available", tags=["arrow_up"])
+        except Exception:
+            pass
 
     def _heartbeat(self):
         while not self._stop.wait(1800):
@@ -174,6 +192,9 @@ class Agent:
                 total += sources.find_new_videos(src, self.db, self.log)
         if total:
             self.log("info", f"Found {total} new video(s) to clip", notify=True, title="🎬 New video", tags=["clapper"])
+        else:
+            self.log("info", f"No new videos yet. Next check in {self.settings['check_sources_every_minutes']} min "
+                             "(or use 'Clip a video link...' to clip one now).")
 
     def source_by_name(self, name):
         for s in self.settings["sources"]:

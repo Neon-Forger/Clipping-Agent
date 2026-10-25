@@ -391,6 +391,8 @@ class App:
         ttk.Button(b, text="Send test notification", command=lambda: self.agent.ntfy.send("If you can read this, your phone is connected ✅",
                                                                                           title="🤖 Test from Clip Cartel Agent", tags=["tada"])).pack(side="left")
         ttk.Button(b, text="Get the phone app", command=lambda: webbrowser.open(APK_URL)).pack(side="left", padx=8)
+        ttk.Button(b, text="Download latest PC version", command=lambda: webbrowser.open(
+            "https://github.com/Neon-Forger/Clipping-Agent/releases/latest")).pack(side="left")
         ttk.Label(c2, text="Anyone who knows the topic can read and control the agent, so keep it private.",
                   style="Card.TLabel").pack(anchor="w")
 
