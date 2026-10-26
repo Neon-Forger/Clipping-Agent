@@ -48,6 +48,8 @@ DEFAULTS = {
     "visual_style": "stock",        # stock = stock footage/photos + captions | stickman = stickman cutout meme edit
     "visual_instructions": "",      # how videos should LOOK (followed beat by beat by the AI editor)
     "stickman_captions": False,     # burn word captions in the stickman style
+    "stock_video": True,            # search free stock-video libraries on the web for moving backgrounds
+    "max_black_percent": 5,         # most beats allowed to be plain black
     "captions": True,
     "caption_style": "neon",        # neon | clean
     # ---- training mode ----

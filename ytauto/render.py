@@ -1,4 +1,5 @@
 """Builds finished YouTube videos (16:9 long-form or 9:16 Shorts) from narration + footage."""
+import math
 import os
 import random
 import shutil
@@ -93,6 +94,19 @@ def build_original(s, segments, portrait, work, out_path, log=None):
     stock = os.path.join(os.path.dirname(work), "_stock")
     from .photos import PhotoSource, pixabay_video
     photos = PhotoSource(s, os.path.join(os.path.dirname(work), "_photos"), None)
+    footage = None
+    if s.get("stock_video", True):
+        from .footage import FootageSource
+        footage = FootageSource(s, os.path.join(os.path.dirname(work), "_footage"), log,
+                                (1080, 1920) if portrait else (1920, 1080))
+        footage.MAX_CLIPS, footage.MAX_SEARCHES = 24, 20
+        if log:
+            log("info", "Searching free stock-video libraries for footage")
+        try:
+            footage.prefetch([seg.get("visual") or s["genre"] for seg in segments for _ in range(3)], portrait)
+        except Exception as e:
+            if log:
+                log("warn", f"Stock video search failed ({e}).")
     warned = False
     for i, seg in enumerate(segments):
         if log:
@@ -104,8 +118,30 @@ def build_original(s, segments, portrait, work, out_path, log=None):
         q = seg.get("visual") or s["genre"]
         src = visuals.pexels_video(q, s.get("pexels_api_key"), portrait, stock, used) \
             or pixabay_video(q, s.get("pixabay_api_key"), portrait, stock, used)
+        pieces = []
+        if not src and footage is not None:
+            n = max(1, min(4, int(math.ceil(dur / 5.0))))
+            for _ in range(n):
+                got = footage.get(q, portrait)
+                if got:
+                    pieces.append(got)
         if src:
             _fit_clip(src, dur, clip, portrait)
+        elif pieces:
+            subs = []
+            for k, (p, off) in enumerate(pieces):
+                sub = os.path.join(work, f"c{i:02d}_{k}.mp4")
+                _fit_clip(p, dur / len(pieces) + 0.05, sub, portrait, start=off)
+                subs.append(sub)
+            if len(subs) == 1:
+                os.replace(subs[0], clip)
+            else:
+                lst = os.path.join(work, f"c{i:02d}.txt")
+                with open(lst, "w", encoding="utf-8") as f:
+                    for sub in subs:
+                        f.write(f"file '{os.path.basename(sub)}'\n")
+                run([ffmpeg_path(), "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", os.path.basename(lst),
+                     "-c", "copy", os.path.basename(clip)], cwd=work, timeout=600)
         else:
             img = visuals.ai_image(s["ai"], f"Cinematic, moody, high-detail scene: {seg.get('visual') or s['genre']}",
                                    os.path.join(work, f"i{i:02d}.png"), "9:16" if portrait else "16:9") \
@@ -121,7 +157,7 @@ def build_original(s, segments, portrait, work, out_path, log=None):
                 if log and not warned:
                     warned = True
                     log("warn", "No footage or photo found for some parts, so they use the neon background. "
-                                + photos.status_text() + " A free Pixabay key (YouTube → SETTINGS) adds stock video and photos.")
+                                + photos.status_text() + (" " + footage.status_text() if footage else "") + " A free Pixabay key (YouTube → SETTINGS) adds stock video and photos.")
                 loop = os.path.join(stock, f"neon_loop_{'p' if portrait else 'l'}.mp4")
                 if not os.path.exists(loop):
                     os.makedirs(stock, exist_ok=True)
@@ -139,7 +175,7 @@ def build_original(s, segments, portrait, work, out_path, log=None):
         import json
         json.dump(chapters, f)
     _finish(s, parts, all_words, portrait, work, out_path)
-    return out_path, photos.credits
+    return out_path, photos.credits + (footage.credits if footage else [])
 
 
 def _finish(s, parts, words, portrait, work, out_path):

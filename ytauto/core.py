@@ -310,7 +310,10 @@ class YTAgent:
             _, credits = render.build_original(self.s, sc["segments"], portrait, work, out, log=self.log)
         desc = (sc.get("description") or "").strip()
         if credits:
-            desc += "\n\nPhotos: " + "; ".join(dict.fromkeys(credits))
+            desc += "\n\nStock media credits: " + "; ".join(dict.fromkeys(credits))
+            desc = desc.replace("<", "(").replace(">", ")")     # YouTube rejects angle brackets
+            if len(desc) > 4900:                                # YouTube's limit is 5000
+                desc = desc[:4890].rsplit(";", 1)[0] + " …"
         if not portrait and self.s["long"].get("chapters"):
             ch = _chapters(work)
             if ch:

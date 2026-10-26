@@ -7,6 +7,7 @@ import json
 import math
 import os
 import random
+import re
 import subprocess
 import sys
 
@@ -23,7 +24,7 @@ EXPRESSIONS = ["neutral", "happy", "shocked", "worried", "angry", "smug"]
 PLACEMENTS = ["center", "corner_bl", "corner_br", "corner_tl", "corner_tr", "edge_left", "edge_right"]
 MOTIONS = ["cut", "fly_left", "fly_right", "fly_top", "fly_bottom", "pop", "slide", "spin"]
 ZOOMS = ["none", "push", "punch"]
-BGS = ["photo", "black", "ui"]
+BGS = ["video", "photo", "black", "ui"]
 TIER_COLORS = {"S": (230, 57, 70), "A": (247, 140, 44), "B": (246, 205, 58), "C": (76, 187, 96)}
 
 
@@ -247,7 +248,9 @@ VISUAL DIRECTION FROM THE OWNER (follow it over any default):
 {direction}
 
 What the editor can do (use ONLY these values):
-- bg: "photo" (a real stock photo; give "query": 2-5 plain words to search, never a real person's name or face), "black", or "ui" (a flat generic app/website screen)
+- bg: "video" (moving stock footage or animation; give "query": 2-4 plain visual words to search, e.g. "foggy forest night",
+  "old film reel", "police car lights", never a real person's name), "photo" (a real stock photo; same kind of "query"),
+  "black" (plain black, rarely), or "ui" (a flat generic app/website screen)
 - pose: {poses}
 - expression: {expressions}
 - placement: {placements}   (corner_*/edge_* = tilted and partly cropped off the frame like a webcam overlay; center = full body in the lower middle third)
@@ -263,6 +266,9 @@ Text only appears inside graphics. Only add graphics with text if the direction 
 
 The narration is split into segments; each needs exactly the given number of beats (hard cuts every 1-2 s).
 Vary poses, placements and motions so consecutive beats never look the same. Backgrounds must match what is being said.
+BACKGROUNDS: use "video" for most beats (moving footage keeps viewers watching), "photo" for the rest. Use "black" on at most
+{black_pct}% of beats (only for a deliberate dramatic pause), even if the direction mentions black. Queries must be concrete things
+a camera could film (places, objects, weather, crowds, vehicles), not abstract ideas: "abandoned hospital hallway", not "mystery".
 
 SEGMENTS:
 {segments}
@@ -281,7 +287,7 @@ def plan(s, segs, log=None):
         lines.append(f"{i + 1}. ({sg['beats']} beats, {sg['dur']:.1f}s) {sg['text']}")
     prompt = PLAN_PROMPT.format(direction=direction, poses=", ".join(POSES), expressions=", ".join(EXPRESSIONS),
                                 placements=", ".join(PLACEMENTS), motions=", ".join(MOTIONS), zooms=", ".join(ZOOMS),
-                                segments="\n".join(lines))
+                                segments="\n".join(lines), black_pct=_black_pct(s))
     try:
         data = ai.parse_json(ai.ask(s["ai"], prompt, json_mode=True))
         planned = data.get("segments") or []
@@ -300,7 +306,39 @@ def plan(s, segs, log=None):
             b = beats[k] if k < len(beats) and isinstance(beats[k], dict) else {}
             fixed.append(_clean_beat(b, rnd, sg["text"]))
         out.append(fixed)
+    _limit_black(out, segs, _black_pct(s), rnd)
     return out
+
+
+def _black_pct(s):
+    try:
+        return max(0, min(100, int(s.get("max_black_percent", 5))))
+    except (TypeError, ValueError):
+        return 5
+
+
+_STOP = set("the a an and or but of to in on at for with is are was were be been it its this that these those he she they "
+            "we you i his her their our your my me him them who what when where why how not no so as by from into just "
+            "than then there here very can could would should will about".split())
+
+
+def _query_from(text, genre):
+    words = [w for w in re.findall(r"[A-Za-z']+", text.lower()) if w not in _STOP and len(w) > 2]
+    return " ".join(words[:3]) or (genre or "city night")
+
+
+def _limit_black(out, segs, pct, rnd):
+    """Turns black beats beyond the allowed share into video/photo beats about what's being said."""
+    flat = [(i, b) for i, beats in enumerate(out) for b in beats]
+    allowed = int(len(flat) * pct / 100)
+    blacks = [(i, b) for i, b in flat if b["bg"] == "black" and not (b.get("graphic") or {}).get("type") in ("ring", "tier")]
+    rnd.shuffle(blacks)
+    for n, (i, b) in enumerate(blacks):
+        if n < allowed:
+            continue
+        b["bg"] = "video" if n % 3 else "photo"
+        if not b.get("query_given"):
+            b["query"] = _query_from(segs[i]["text"], None)
 
 
 def _clean_beat(b, rnd, text):
@@ -311,8 +349,9 @@ def _clean_beat(b, rnd, text):
     if not (isinstance(g, dict) and g.get("type") in ("panel", "ring", "tier", "card")):
         g = None
     return {
-        "bg": pick("bg", BGS, "photo"),
-        "query": str(b.get("query") or " ".join(text.split()[:4]))[:60],
+        "bg": pick("bg", BGS, "video" if rnd.random() < 0.6 else "photo"),
+        "query": str(b.get("query") or _query_from(text, None))[:60],
+        "query_given": bool(b.get("query")),
         "pose": pick("pose", POSES, rnd.choice(POSES)),
         "expression": pick("expression", EXPRESSIONS, rnd.choice(EXPRESSIONS)),
         "placement": pick("placement", PLACEMENTS, rnd.choice(PLACEMENTS)),
@@ -343,22 +382,83 @@ def _target(placement, W, H, seed):
     }.get(placement, (W * 0.5, H * 0.66, H * 0.5, 0))
 
 
+class _Bg:
+    """Everything a beat can pull a background from, plus memory of recent good backgrounds (so a miss isn't black)."""
+
+    def __init__(self, photos, footage, portrait, genre):
+        self.photos, self.footage, self.portrait, self.genre = photos, footage, portrait, genre
+        self.recent = []         # recent good still backgrounds
+        self.counts = {"video": 0, "photo": 0, "ui": 0, "reused": 0, "gradient": 0, "black": 0}
+
+    def remember(self, img):
+        self.recent.append(img)
+        del self.recent[:-6]
+
+    def reuse(self, seed):
+        if not self.recent:
+            return None
+        img = self.recent[seed % len(self.recent)]
+        if seed % 2:
+            img = ImageOps.mirror(img)       # flipped + different crop so it doesn't look repeated
+        self.counts["reused"] += 1
+        return img
+
+
+def _gradient(w, h, seed):
+    rnd = random.Random(seed)
+    hue = rnd.choice([(20, 40, 90), (60, 20, 80), (10, 70, 80), (90, 30, 30), (30, 60, 40)])
+    top = Image.new("RGB", (1, 2))
+    top.putpixel((0, 0), tuple(min(255, c + 40) for c in hue))
+    top.putpixel((0, 1), tuple(c // 4 for c in hue))
+    return top.resize((w, h), Image.BICUBIC)
+
+
 class _Beat:
-    def __init__(self, beat, dur, W, H, photos, portrait, seed):
+    def __init__(self, beat, dur, W, H, bgs, portrait, seed):
         self.b, self.dur, self.W, self.H, self.seed = beat, dur, W, H, seed
         bg = beat["bg"]
         g = beat.get("graphic")
-        base = None
+        BW, BH = int(W * 1.06), int(H * 1.06)
+        base, self.reader = None, None
         if g and g["type"] in ("ring", "tier"):
             base = None
         elif g and g["type"] == "card":
-            base = g_card(W, H, photos.get(g.get("query") or beat["query"], portrait)).convert("RGB")
-        elif bg == "photo":
-            ph = photos.get(beat["query"], portrait)
-            base = _cover(ph, int(W * 1.06), int(H * 1.06)) if ph else None
+            base = g_card(W, H, bgs.photos.get(g.get("query") or beat["query"], portrait)).convert("RGB")
+        elif bg == "black":
+            base = Image.new("RGB", (BW, BH), (0, 0, 0))
+            bgs.counts["black"] += 1
         elif bg == "ui":
-            base = ui_screen(int(W * 1.06), int(H * 1.06), seed)
-        self.base = base if base is not None else Image.new("RGB", (int(W * 1.06), int(H * 1.06)), (0, 0, 0))
+            base = ui_screen(BW, BH, seed)
+            bgs.counts["ui"] += 1
+        else:
+            order = ["video", "photo"] if bg == "video" else ["photo", "video"]
+            for kind in order:
+                if kind == "video" and bgs.footage is not None:
+                    got = bgs.footage.get(beat["query"], portrait)
+                    if got:
+                        from .footage import ClipReader
+                        self.reader = ClipReader(got[0], got[1], BW, BH)
+                        first = self.reader.next()
+                        if first is not None:
+                            base = first
+                            bgs.counts["video"] += 1
+                            break
+                        self.reader.close()
+                        self.reader = None
+                elif kind == "photo":
+                    ph = bgs.photos.get(beat["query"], portrait)
+                    if ph is not None:
+                        base = _cover(ph, BW, BH)
+                        bgs.remember(base)
+                        bgs.counts["photo"] += 1
+                        break
+            if base is None:
+                base = bgs.reuse(seed)
+            if base is None:
+                base = _gradient(BW, BH, seed)
+                bgs.counts["gradient"] += 1
+        self.base = base if base is not None else Image.new("RGB", (BW, BH), (0, 0, 0))
+        self._first = True
         self.overlay = g_panel(W, H, g.get("text", ""), g.get("color", "#FF3B30")) if g and g["type"] == "panel" else None
         self.tier = g_tier(W, H, g.get("rows")).convert("RGB") if g and g["type"] == "tier" else None
         self.ring = g if g and g["type"] == "ring" else None
@@ -382,6 +482,11 @@ class _Beat:
         elif self.ring is not None:
             im = g_ring(W, H, float(self.ring.get("value") or 0), str(self.ring.get("label") or ""), _ease(min(1, p * 1.4))).convert("RGB")
         else:
+            if self.reader is not None and not self._first:
+                nxt = self.reader.next()
+                if nxt is not None:
+                    self.base = nxt
+            self._first = False
             bw, bh = self.base.size
             z = 1.0 + (0.05 * p if b["zoom"] in ("push", "punch") else 0)
             cw, ch = bw / z, bh / z
@@ -485,6 +590,20 @@ def build(s, segments, portrait, work, out_path, log=None):
         log("info", "AI planning the visuals")
     beats = plan(s, segs, log)
     photos = PhotoSource(s, os.path.join(os.path.dirname(work), "_photos"), log)
+    footage = None
+    vq = [b["query"] for bl in beats for b in bl if b["bg"] in ("video", "photo") and not b.get("graphic")]
+    vq_video = [b["query"] for bl in beats for b in bl if b["bg"] == "video" and not b.get("graphic")]
+    if s.get("stock_video", True) and vq:
+        from .footage import FootageSource
+        if log:
+            log("info", "Searching free stock-video libraries for moving backgrounds")
+        footage = FootageSource(s, os.path.join(os.path.dirname(work), "_footage"), log, (int(W * 1.06), int(H * 1.06)))
+        try:
+            footage.prefetch(vq_video or vq[:6], portrait)
+        except Exception as e:
+            if log:
+                log("warn", f"Stock video search failed ({e}); using photos.")
+    bgs = _Bg(photos, footage, portrait, s.get("genre"))
 
     if log:
         log("info", "Drawing frames")
@@ -504,10 +623,14 @@ def build(s, segments, portrait, work, out_path, log=None):
                 nf = per[bi]
                 if nf <= 0:
                     continue
-                beat = _Beat(b, nf / FPS, W, H, photos, portrait, seed)
-                for k in range(nf):
-                    proc.stdin.write(beat.frame(k / FPS).tobytes())
-                    frame_no += 1
+                beat = _Beat(b, nf / FPS, W, H, bgs, portrait, seed)
+                try:
+                    for k in range(nf):
+                        proc.stdin.write(beat.frame(k / FPS).tobytes())
+                        frame_no += 1
+                finally:
+                    if beat.reader is not None:
+                        beat.reader.close()
         proc.stdin.close()
         err = proc.stderr.read().decode("utf-8", "replace")
         if proc.wait() != 0:
@@ -519,10 +642,17 @@ def build(s, segments, portrait, work, out_path, log=None):
             pass
         raise
     if log:
-        log("info", f"Photos used: {photos.summary()}" + ("" if photos.got else f" ({photos.status_text()})"))
+        c = bgs.counts
+        log("info", f"Backgrounds: {c['video']} moving, {c['photo']} photo, {c['ui']} screen, {c['reused']} reused, "
+                    f"{c['gradient']} color, {c['black']} black. Photos: {photos.summary()}"
+                    + (f". Video: {footage.summary()}" if footage else ""))
+        if c["gradient"] + c["reused"] > max(3, (c["video"] + c["photo"]) // 2):
+            log("warn", "Many backgrounds couldn't be found. " + photos.status_text()
+                + (" " + footage.status_text() if footage else "")
+                + " Free Pexels/Pixabay keys (YouTube → SETTINGS) add a lot more stock footage.")
     captions = bool(s.get("stickman_captions", False))
     if captions and not os.path.isdir(os.path.join(work, "fonts")):
         import shutil
         shutil.copytree(fonts_dir(), os.path.join(work, "fonts"))
     _finish(_Override(s, captions=captions), [mux], words_all if captions else [], portrait, work, out_path)
-    return out_path, photos.credits
+    return out_path, photos.credits + (footage.credits if footage else [])

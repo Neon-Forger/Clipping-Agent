@@ -487,6 +487,9 @@ class YouTubeView:
                              ("pexels_api_key", "Pexels API key (optional: pexels.com/api)", "secret"),
                              ("pixabay_api_key", "Pixabay API key (free photos + stock video: pixabay.com/api/docs)", "secret"),
                              ("unsplash_access_key", "Unsplash Access Key (free photos: unsplash.com/developers)", "secret"),
+                             ("stock_video", "Search the web's free stock-video libraries for moving backgrounds "
+                                             "(Wikimedia Commons, Internet Archive, NASA + Pexels/Pixabay with keys)", "bool"),
+                             ("max_black_percent", "Most beats allowed to be plain black (%)", "int"),
                              ("music_folder", "Background music folder (only music you have rights to)", "dir"),
                              ("music_volume", "Music volume (0-1)", "float"), ("captions", "Burn in captions", "bool"),
                              ("thumbnails.ai_images", "Use AI images (thumbnails / visuals when no footage)", "bool")]),
@@ -525,16 +528,19 @@ class YouTubeView:
         b.pack(fill="x", padx=8, pady=14)
         ttk.Button(b, text="Save settings", style="Accent.TButton", command=self._save_settings).pack(side="left")
         ttk.Button(b, text="Edit all settings (youtube.json)", command=lambda: open_path(self.yt.s.path)).pack(side="left", padx=8)
-        ttk.Button(b, text="Test photo sources", command=self._test_photos).pack(side="left")
+        ttk.Button(b, text="Test photo + video sources", command=self._test_photos).pack(side="left")
 
     def _test_photos(self):
         from agent.config import data_dir as _dd
         from . import photos
 
+        from . import footage
+
         def go():
-            return photos.test_sources(self.yt.s, os.path.join(_dd(), "yt-work", "_photos"))
-        self._bg(go, done=lambda rep: messagebox.showinfo("Photo sources", rep + "\n\nOpenverse and Wikimedia need no key. "
-                                                                            "Keys make photos more reliable and add stock video (Pixabay)."))
+            return ("PHOTOS\n" + photos.test_sources(self.yt.s, os.path.join(_dd(), "yt-work", "_photos"))
+                    + "\n\nSTOCK VIDEO\n" + footage.test_sources(self.yt.s, os.path.join(_dd(), "yt-work", "_footage")))
+        self._bg(go, done=lambda rep: messagebox.showinfo("Photo + video sources", rep + "\n\nOpenverse, Wikimedia, Internet Archive "
+                                                          "and NASA need no key. Pexels/Pixabay keys add a lot more stock footage."))
 
     def _save_settings(self):
         for key, (v, kind) in self.svars.items():

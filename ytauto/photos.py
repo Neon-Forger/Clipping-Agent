@@ -53,7 +53,7 @@ class PhotoSource:
             img = self._ai(q, portrait)
         if img is None and not self._warned and self.log:
             self._warned = True
-            self.log("warn", "Couldn't get photos for some backgrounds (using black). " + self.status_text())
+            self.log("warn", "Couldn't get photos for some backgrounds (using video or other backgrounds instead). " + self.status_text())
         return img
 
     def status_text(self):

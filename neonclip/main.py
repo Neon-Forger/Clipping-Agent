@@ -17,7 +17,7 @@ def selftest():
     clip_selftest()
     import edge_tts  # noqa
     import PIL  # noqa
-    from ytauto import core, gui, render, studio, thumbs, visuals, writer  # noqa
+    from ytauto import core, footage, gui, photos, render, stickman, studio, thumbs, training, visuals, writer  # noqa
     from neonclip import app, theme  # noqa
     print("neonclip selftest ok")
 
