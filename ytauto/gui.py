@@ -7,6 +7,7 @@ import tkinter as tk
 import webbrowser
 from tkinter import filedialog, messagebox, ttk
 
+from agent import ai
 from agent.config import data_dir
 from agent.gui import open_path
 from neonclip import theme
@@ -33,7 +34,7 @@ class YouTubeView:
         nb.pack(fill="both", expand=True, padx=14, pady=8)
         self.nb = nb
         self.tabs = {}
-        for name, fn in (("DASHBOARD", self._dash), ("VIDEOS", self._videos), ("CHANNEL", self._channel),
+        for name, fn in (("DASHBOARD", self._dash), ("SCHEDULE", self._schedule), ("VIDEOS", self._videos), ("CHANNEL", self._channel),
                          ("CONTENT", self._content), ("SETTINGS", self._settings)):
             f = ttk.Frame(nb)
             nb.add(f, text=name)
@@ -41,6 +42,7 @@ class YouTubeView:
             fn(f)
         if not yt.s["setup_done"]:
             nb.select(self.tabs["CHANNEL"])
+        nb.bind("<<NotebookTabChanged>>", lambda e: self._on_tab())
         self.root.after(400, self._pump)
         self.root.after(1200, self._refresh)
 
@@ -188,10 +190,13 @@ class YouTubeView:
             tv.heading(c, text=c.upper())
             tv.column(c, width=w, anchor="w")
         tv.pack(fill="both", expand=True, padx=6, pady=8)
+        tv.bind("<Double-1>", lambda e: self._open_sel("file"))
         self.tv = tv
         b = ttk.Frame(f)
         b.pack(fill="x", padx=6, pady=(0, 8))
         ttk.Button(b, text="Play", command=lambda: self._open_sel("file")).pack(side="left", padx=(0, 6))
+        ttk.Button(b, text="Re-edit visuals…", style="Pink.TButton",
+                   command=lambda: self._reedit_dialog(self._selid())).pack(side="left", padx=6)
         ttk.Button(b, text="Thumbnail", command=lambda: self._open_sel("thumb")).pack(side="left", padx=6)
         ttk.Button(b, text="Upload this now", style="Accent.TButton", command=self._upload_sel).pack(side="left", padx=6)
         ttk.Button(b, text="Skip", command=lambda: self._sel_cmd("skip")).pack(side="left", padx=6)
@@ -229,6 +234,201 @@ class YouTubeView:
         if iid:
             self._cmd(f"{cmd} {iid}")
             self.root.after(500, self._fill)
+
+    # ------------------------------------------------------------ re-edit
+    def _reedit_dialog(self, iid):
+        if not iid:
+            messagebox.showinfo("Re-edit", "Pick a video in the list first.")
+            return
+        it = self.yt.item(iid)
+        why = self.yt.can_reedit(it)
+        if why:
+            messagebox.showinfo("Re-edit", why)
+            return
+        win = tk.Toplevel(self.root)
+        win.title(f"Re-edit #{iid}")
+        win.configure(bg=BG)
+        win.geometry("640x430")
+        win.transient(self.root)
+        box = ttk.Frame(win, style="Card.TFrame", padding=16)
+        box.pack(fill="both", expand=True, padx=12, pady=12)
+        ttk.Label(box, text="✏️ RE-EDIT VISUALS", style="Big.TLabel").pack(anchor="w")
+        ttk.Label(box, text=(it["title"] or "")[:90], style="Card.TLabel").pack(anchor="w", pady=(4, 0))
+        ttk.Label(box, text="The voiceover, script and timing stay exactly the same. Only the footage/visuals you describe "
+                            "are redone; everything else in the video is kept as it is.",
+                  style="CardMuted.TLabel", wraplength=580, justify="left").pack(anchor="w", pady=(6, 10))
+        ttk.Label(box, text="What should change?", style="Card.TLabel").pack(anchor="w")
+        txt = tk.Text(box, height=7, bg=theme.PANEL2 if hasattr(theme, "PANEL2") else PANEL, fg=FG, insertbackground=ICE,
+                      relief="flat", wrap="word", font=(theme.BODY, 11))
+        txt.pack(fill="both", expand=True, pady=(4, 6))
+        ttk.Label(box, text="e.g. \"the clip at 0:12 shows a beach, use a dark foggy forest instead\" · "
+                            "\"the footage in the middle repeats, use different clips\" · \"more police lights and old documents\" · "
+                            "\"no stickman in the last 5 seconds\"",
+                  style="CardMuted.TLabel", wraplength=580, justify="left").pack(anchor="w")
+        row = ttk.Frame(box, style="Card.TFrame")
+        row.pack(fill="x", pady=(12, 0))
+
+        def go():
+            instr = " ".join(txt.get("1.0", "end").split())
+            if not instr:
+                return
+            msg = self.yt.request_reedit(iid, instr)
+            self.q.put(("info", msg))
+            win.destroy()
+            self._fill()
+            self._sched_fill()
+
+        ttk.Button(row, text="Watch it first", command=lambda: open_path(it["file"])).pack(side="left")
+        ttk.Button(row, text="Cancel", command=win.destroy).pack(side="right")
+        ttk.Button(row, text="Re-edit", style="Accent.TButton", command=go).pack(side="right", padx=8)
+        txt.focus_set()
+
+    # ----------------------------------------------------------- schedule
+    STATE_COLORS = {"ready": theme.GREEN, "editing": theme.PINK, "making": theme.GOLD, "planned": theme.MUTED,
+                    "posted": theme.ICE, "new": theme.MUTED, "empty": theme.RED}
+
+    def _schedule(self, f):
+        top = ttk.Frame(f, style="Card.TFrame", padding=14)
+        top.pack(fill="x", padx=6, pady=(10, 4))
+        left = ttk.Frame(top, style="Card.TFrame")
+        left.pack(side="left", fill="x", expand=True)
+        ttk.Label(left, text="NEXT POST", style="CardMuted.TLabel").pack(anchor="w")
+        self.sched_next = ttk.Label(left, text="–", style="Num.TLabel")
+        self.sched_next.pack(anchor="w")
+        self.sched_sub = ttk.Label(left, text="", style="CardMuted.TLabel")
+        self.sched_sub.pack(anchor="w")
+        right = ttk.Frame(top, style="Card.TFrame")
+        right.pack(side="right")
+        r1 = ttk.Frame(right, style="Card.TFrame")
+        r1.pack(anchor="e")
+        ttk.Label(r1, text="Post at", style="Card.TLabel").pack(side="left")
+        self.times_var = tk.StringVar()
+        ttk.Entry(r1, textvariable=self.times_var, width=26).pack(side="left", padx=6)
+        ttk.Label(r1, text="Make at", style="Card.TLabel").pack(side="left", padx=(8, 0))
+        self.makeat_var = tk.StringVar()
+        ttk.Entry(r1, textvariable=self.makeat_var, width=8).pack(side="left", padx=6)
+        ttk.Button(r1, text="Save times", command=self._save_times).pack(side="left")
+        ttk.Label(right, text="Times like 9:00, 15:30, 19:00 (24-hour) or 3:30pm, separated by commas.",
+                  style="CardMuted.TLabel").pack(anchor="e", pady=(6, 0))
+        self.sched_body = self._scroll(f)
+        self.sched_rows = None
+        self._sched_fill()
+
+    def _save_times(self):
+        times = []
+        for part in self.times_var.get().replace(";", ",").split(","):
+            tm = _parse_time(part)
+            if part.strip() and not tm:
+                messagebox.showerror("Schedule", f"\"{part.strip()}\" isn't a time. Use e.g. 15:30 or 3:30pm.")
+                return
+            if tm:
+                times.append(tm)
+        mk = _parse_time(self.makeat_var.get())
+        if not times or not mk:
+            messagebox.showerror("Schedule", "Add at least one posting time and a make-at time.")
+            return
+        self.yt.s.set("daily.upload_times", sorted(set(times)))
+        self.yt.s.set("daily.make_at", mk)
+        self.yt.wake.set()
+        self.yt.push_state()
+        self._sched_fill()
+
+    def _sched_fill(self):
+        if not hasattr(self, "sched_body"):
+            return
+        try:
+            rows = self.yt.schedule(days=3)
+        except Exception as e:
+            rows = []
+            self.yt.log("error", f"Schedule: {e}")
+        d = self.yt.s["daily"]
+        if not self.focus_in_schedule():
+            self.times_var.set(", ".join(_pretty(x) for x in sorted(d.get("upload_times") or [], key=self.yt._hm)))
+            self.makeat_var.set(_pretty(d.get("make_at") or "08:00"))
+        upcoming = [r for r in rows if r["state"] != "posted"]
+        nxt = next((r for r in upcoming if r.get("id")), None)
+        if nxt:
+            self.sched_next.config(text=f"{nxt['when_text']}")
+            self.sched_sub.config(text=f"{nxt['countdown']} · #{nxt['id']} {nxt['title'][:70]}"
+                                       + (" · ⏸ uploads are PAUSED" if self.yt.s["paused"] else ""))
+        else:
+            self.sched_next.config(text="Nothing queued")
+            self.sched_sub.config(text="Make a video on the DASHBOARD, or wait for today's plan."
+                                       + (" · ⏸ uploads are PAUSED" if self.yt.s["paused"] else ""))
+        key = json.dumps([(r["when"], r["id"], r["state"], r["title"], r["countdown"]) for r in rows])
+        if key == self.sched_rows:
+            return
+        self.sched_rows = key
+        for w in self.sched_body.winfo_children():
+            w.destroy()
+        days = []
+        for r in rows:
+            if not days or days[-1][0] != r["day"]:
+                days.append((r["day"], r, []))
+            days[-1][2].append(r)
+        if not days:
+            ttk.Label(self.sched_body, text="No posting times set. Add some above.", style="Muted.TLabel").pack(anchor="w", padx=10, pady=10)
+        for _, first, items in days:
+            head = ttk.Frame(self.sched_body)
+            head.pack(fill="x", padx=6, pady=(14, 4))
+            ttk.Label(head, text=first["day_label"].upper(), style="H.TLabel").pack(side="left")
+            ttk.Label(head, text="  " + first["date_text"], style="Muted.TLabel").pack(side="left", pady=(3, 0))
+            n_vid = sum(1 for r in items if r.get("id") and r["state"] != "posted")
+            n_post = sum(1 for r in items if r["state"] == "posted")
+            ttk.Label(head, text=(f"{n_post} posted · " if n_post else "") + f"{n_vid} queued", style="Muted.TLabel").pack(side="right")
+            for r in items:
+                self._sched_row(r)
+
+    def focus_in_schedule(self):
+        try:
+            w = self.root.focus_get()
+            return w is not None and str(w).startswith(str(self.tabs["SCHEDULE"]))
+        except Exception:
+            return False
+
+    def _sched_row(self, r):
+        color = self.STATE_COLORS.get(r["state"], FG)
+        card = tk.Frame(self.sched_body, bg=PANEL, highlightthickness=1, highlightbackground=theme.LINE)
+        card.pack(fill="x", padx=6, pady=3)
+        tk.Frame(card, bg=color, width=5).pack(side="left", fill="y")
+        tcol = tk.Frame(card, bg=PANEL, width=120)
+        tcol.pack(side="left", fill="y", padx=(12, 6), pady=8)
+        tk.Label(tcol, text=r["time_text"], bg=PANEL, fg=ICE, font=(theme.DISPLAY, 13), width=9, anchor="w").pack(anchor="w")
+        tk.Label(tcol, text=r["countdown"], bg=PANEL, fg=theme.MUTED, font=(theme.BODY, 9), width=16, anchor="w").pack(anchor="w")
+        mid = tk.Frame(card, bg=PANEL)
+        mid.pack(side="left", fill="both", expand=True, pady=8)
+        line = tk.Frame(mid, bg=PANEL)
+        line.pack(anchor="w")
+        if r.get("kind"):
+            tk.Label(line, text=" SHORT " if r["kind"] == "short" else " LONG ", bg=theme.PINK if r["kind"] == "short" else theme.BLUE,
+                     fg="#021018", font=(theme.DISPLAY, 7)).pack(side="left", padx=(0, 8))
+        title = f"#{r['id']}  {r['title']}" if r.get("id") else r["state_text"]
+        tk.Label(line, text=title[:90], bg=PANEL, fg=FG if r.get("id") else theme.MUTED,
+                 font=(theme.BODY, 11, "bold" if r.get("id") else "normal")).pack(side="left")
+        if r.get("id"):
+            tk.Label(mid, text="● " + r["state_text"], bg=PANEL, fg=color, font=(theme.BODY, 9)).pack(anchor="w", pady=(2, 0))
+        btns = tk.Frame(card, bg=PANEL)
+        btns.pack(side="right", padx=10)
+        if r["state"] == "posted" and r.get("url"):
+            ttk.Button(btns, text="Open", command=lambda u=r["url"]: webbrowser.open(u)).pack(side="right")
+        elif r.get("id") and r["state"] in ("ready",):
+            ttk.Button(btns, text="Post now", command=lambda i=r["id"]: self._post_now(i)).pack(side="right", padx=(4, 0))
+            ttk.Button(btns, text="Re-edit…", command=lambda i=r["id"]: self._reedit_dialog(i)).pack(side="right", padx=4)
+            ttk.Button(btns, text="Watch", command=lambda p=r.get("file"): p and open_path(p)).pack(side="right", padx=4)
+
+    def _post_now(self, iid):
+        if messagebox.askyesno("Post now", f"Upload video #{iid} to YouTube now instead of at its scheduled time?"):
+            threading.Thread(target=self.yt.upload_next, args=(iid,), daemon=True).start()
+
+    def _on_tab(self):
+        try:
+            name = self.nb.tab(self.nb.select(), "text")
+        except Exception:
+            return
+        if name == "SCHEDULE":
+            self._sched_fill()
+        elif name == "VIDEOS":
+            self._fill()
 
     # ------------------------------------------------------------- channel
     def _channel(self, f):
@@ -365,7 +565,7 @@ class YouTubeView:
                 missing.append("pick a channel (step 2)")
             if not s["genre"]:
                 missing.append("set a genre (CONTENT tab)")
-            if not any(s["ai"].get(k) for k in ("gemini_api_key", "openrouter_api_key", "openai_compatible_api_key")):
+            if not ai.has_key(s["ai"]):
                 missing.append("add an AI key (SETTINGS tab)")
             if missing:
                 self.on_var.set(False)
@@ -479,6 +679,9 @@ class YouTubeView:
     # ------------------------------------------------------------ settings
     SETTINGS = [
         ("AI (YouTube only)", [("ai.gemini_api_key", "Gemini API key", "secret"), ("ai.gemini_model", "Gemini model (auto = newest)", ""),
+                               ("ai.nvidia_api_key", "NVIDIA API key (free at build.nvidia.com, starts with nvapi-)", "secret"),
+                               ("ai.nvidia_model", "NVIDIA model (auto, or e.g. meta/llama-3.3-70b-instruct)", ""),
+                               ("ai.first", "Use this AI first (gemini, nvidia, openrouter or blank)", ""),
                                ("ai.openrouter_api_key", "OpenRouter API key", "secret"), ("ai.openrouter_model", "OpenRouter model", ""),
                                ("ai.openai_compatible_base_url", "Other OpenAI-compatible URL", ""),
                                ("ai.openai_compatible_api_key", "Other API key", "secret"), ("ai.openai_compatible_model", "Other model", "")]),
@@ -556,7 +759,7 @@ class YouTubeView:
                 except ValueError:
                     continue
             self.yt.s.set(key, val)
-        if self.yt.s["paused"] and any(self.yt.s["ai"].get(k) for k in ("gemini_api_key", "openrouter_api_key", "openai_compatible_api_key")):
+        if self.yt.s["paused"] and ai.has_key(self.yt.s["ai"]):
             self.yt.state.pop("ai_warned", None)
         self.yt.wake.set()
         messagebox.showinfo("NeonClip", "Saved.")
@@ -601,8 +804,33 @@ class YouTubeView:
     def _refresh(self):
         try:
             self._refresh_once()
-            if self.nb.index(self.nb.select()) == 1:
-                pass
+            if self.nb.tab(self.nb.select(), "text") == "SCHEDULE":
+                self._sched_fill()
         except Exception:
             pass
         self.root.after(5000, self._refresh)
+
+
+def _parse_time(text):
+    """'15:30', '3:30pm', '3 pm', '9' -> 'HH:MM' (24-hour) or None."""
+    import re as _re
+    m = _re.match(r"^\s*(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)?\s*$", (text or "").lower())
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2) or 0)
+    if m.group(3):
+        if not 1 <= h <= 12:
+            return None
+        h = (h % 12) + (12 if m.group(3).startswith("p") else 0)
+    if h > 23 or mi > 59:
+        return None
+    return f"{h:02d}:{mi:02d}"
+
+
+def _pretty(hm):
+    """'15:30' -> '3:30pm'."""
+    t = _parse_time(hm)
+    if not t:
+        return hm
+    h, m = int(t[:2]), t[3:]
+    return f"{(h % 12) or 12}:{m}{'am' if h < 12 else 'pm'}"

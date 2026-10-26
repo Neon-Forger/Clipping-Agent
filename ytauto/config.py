@@ -75,8 +75,10 @@ DEFAULTS = {
     },
     # ---- AI (separate keys from the Clipping section) ----
     "ai": {
-        "provider_order": ["gemini", "openrouter", "openai_compatible"],
+        "provider_order": ["gemini", "nvidia", "openrouter", "openai_compatible"],
+        "first": "",                  # provider to try first (blank = provider_order)
         "gemini_api_key": "", "gemini_model": "auto",
+        "nvidia_api_key": "", "nvidia_model": "auto",
         "openrouter_api_key": "", "openrouter_model": "openrouter/auto",
         "openai_compatible_base_url": "https://api.openai.com/v1",
         "openai_compatible_api_key": "", "openai_compatible_model": "gpt-4o-mini",

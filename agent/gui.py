@@ -229,6 +229,9 @@ class ClippingView:
     # ---- settings
     FIELDS = [
         ("AI", [("ai.gemini_api_key", "Gemini API key", "secret"), ("ai.gemini_model", "Gemini model", ""),
+                ("ai.nvidia_api_key", "NVIDIA API key (free at build.nvidia.com, starts with nvapi-)", "secret"),
+                ("ai.nvidia_model", "NVIDIA model (auto, or e.g. meta/llama-3.3-70b-instruct)", ""),
+                ("ai.first", "Use this AI first (gemini, nvidia, openrouter or blank)", ""),
                 ("ai.openrouter_api_key", "OpenRouter API key", "secret"), ("ai.openrouter_model", "OpenRouter model", ""),
                 ("ai.openai_compatible_base_url", "Other OpenAI-compatible API URL", ""),
                 ("ai.openai_compatible_api_key", "Other API key", "secret"), ("ai.openai_compatible_model", "Other model", ""),

@@ -4,6 +4,7 @@ import os
 import random
 import shutil
 
+from agent import ai
 from agent.tools import ffmpeg_path, fonts_dir, media_duration, run
 
 from . import tts, visuals
@@ -83,48 +84,53 @@ def _music(folder):
     return random.choice(files) if files else None
 
 
-def build_original(s, segments, portrait, work, out_path, log=None):
-    """segments: [{"text", "visual"}]. Narrates, finds footage per segment, adds captions, renders."""
-    os.makedirs(work, exist_ok=True)
-    fdir = os.path.join(work, "fonts")
-    if not os.path.isdir(fdir):
-        shutil.copytree(fonts_dir(), fdir)
-    used = set()
-    parts, all_words, t0, chapters = [], [], 0.0, []
-    stock = os.path.join(os.path.dirname(work), "_stock")
-    from .photos import PhotoSource, pixabay_video
-    photos = PhotoSource(s, os.path.join(os.path.dirname(work), "_photos"), None)
-    footage = None
-    if s.get("stock_video", True):
-        from .footage import FootageSource
-        footage = FootageSource(s, os.path.join(os.path.dirname(work), "_footage"), log,
-                                (1080, 1920) if portrait else (1920, 1080))
-        footage.MAX_CLIPS, footage.MAX_SEARCHES = 24, 20
-        if log:
-            log("info", "Searching free stock-video libraries for footage")
-        try:
-            footage.prefetch([seg.get("visual") or s["genre"] for seg in segments for _ in range(3)], portrait)
-        except Exception as e:
-            if log:
-                log("warn", f"Stock video search failed ({e}).")
-    warned = False
-    for i, seg in enumerate(segments):
-        if log:
-            log("info", f"Voice + footage {i + 1}/{len(segments)}")
-        mp3 = os.path.join(work, f"v{i:02d}.mp3")
-        words = tts.speak(seg["text"], s["voice"], s.get("voice_rate", "+0%"), mp3)
-        dur = max(media_duration(mp3), 0.5) + 0.15
+class _StockCtx:
+    """Footage sources for the stock style, shared by all segments of one video."""
+
+    def __init__(self, s, portrait, work, log, segments_for_prefetch=None, avoid=()):
+        from .photos import PhotoSource
+        self.s, self.portrait, self.work, self.log = s, portrait, work, log
+        self.used = set(avoid)          # Pexels/Pixabay ids used before (re-edit: get different clips)
+        self.stock = os.path.join(os.path.dirname(work), "_stock")
+        self.photos = PhotoSource(s, os.path.join(os.path.dirname(work), "_photos"), None)
+        self.photos.used |= set(avoid)
+        self.footage = None
+        self.warned = False
+        if s.get("stock_video", True):
+            from .footage import FootageSource
+            self.footage = FootageSource(s, os.path.join(os.path.dirname(work), "_footage"), log,
+                                         (1080, 1920) if portrait else (1920, 1080))
+            self.footage.MAX_CLIPS, self.footage.MAX_SEARCHES = 24, 20
+            self.footage.used |= set(avoid)
+            if segments_for_prefetch:
+                if log:
+                    log("info", "Searching free stock-video libraries for footage")
+                try:
+                    self.footage.prefetch([q for q in segments_for_prefetch for _ in range(3)], portrait)
+                except Exception as e:
+                    if log:
+                        log("warn", f"Stock video search failed ({e}).")
+
+    def segment_clip(self, i, q, dur):
+        """Makes c{i}.mp4 (picture only) for one segment. Returns what was used (keys for avoiding it next time, credits)."""
+        from .photos import pixabay_video
+        s, portrait, work = self.s, self.portrait, self.work
         clip = os.path.join(work, f"c{i:02d}.mp4")
-        q = seg.get("visual") or s["genre"]
-        src = visuals.pexels_video(q, s.get("pexels_api_key"), portrait, stock, used) \
-            or pixabay_video(q, s.get("pixabay_api_key"), portrait, stock, used)
+        before = set(self.used)
+        src = visuals.pexels_video(q, s.get("pexels_api_key"), portrait, self.stock, self.used) \
+            or pixabay_video(q, s.get("pixabay_api_key"), portrait, self.stock, self.used)
+        info = {"keys": list(self.used - before), "credits": [], "kind": "video"}
         pieces = []
-        if not src and footage is not None:
+        if not src and self.footage is not None:
             n = max(1, min(4, int(math.ceil(dur / 5.0))))
             for _ in range(n):
-                got = footage.get(q, portrait)
+                got = self.footage.get(q, portrait)
                 if got:
                     pieces.append(got)
+                    info["keys"].append(self.footage.key_of.get(got[0]))
+                    cr = self.footage.credit_of.get(got[0])
+                    if cr:
+                        info["credits"].append(cr)
         if src:
             _fit_clip(src, dur, clip, portrait)
         elif pieces:
@@ -143,39 +149,138 @@ def build_original(s, segments, portrait, work, out_path, log=None):
                 run([ffmpeg_path(), "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", os.path.basename(lst),
                      "-c", "copy", os.path.basename(clip)], cwd=work, timeout=600)
         else:
-            img = visuals.ai_image(s["ai"], f"Cinematic, moody, high-detail scene: {seg.get('visual') or s['genre']}",
+            info["kind"] = "photo"
+            img = visuals.ai_image(s["ai"], f"Cinematic, moody, high-detail scene: {q}",
                                    os.path.join(work, f"i{i:02d}.png"), "9:16" if portrait else "16:9") \
                 if s.get("thumbnails", {}).get("ai_images") else None
             if not img:
-                ph = photos.get(seg.get("visual") or s["genre"], portrait)
+                ph = self.photos.get(q, portrait)
                 if ph is not None:
                     img = os.path.join(work, f"p{i:02d}.jpg")
                     ph.save(img, "JPEG", quality=92)
+                    info["keys"].append(self.photos.last_key)
+                    if self.photos.last_credit:
+                        info["credits"].append(self.photos.last_credit)
             if img:
                 _fit_clip(img, dur, clip, portrait, still=True, zoom_seed=i)
             else:
-                if log and not warned:
-                    warned = True
-                    log("warn", "No footage or photo found for some parts, so they use the neon background. "
-                                + photos.status_text() + (" " + footage.status_text() if footage else "") + " A free Pixabay key (YouTube → SETTINGS) adds stock video and photos.")
-                loop = os.path.join(stock, f"neon_loop_{'p' if portrait else 'l'}.mp4")
+                info["kind"] = "neon"
+                if self.log and not self.warned:
+                    self.warned = True
+                    self.log("warn", "No footage or photo found for some parts, so they use the neon background. "
+                             + self.photos.status_text() + (" " + self.footage.status_text() if self.footage else "")
+                             + " A free Pixabay key (YouTube → SETTINGS) adds stock video and photos.")
+                loop = os.path.join(self.stock, f"neon_loop_{'p' if portrait else 'l'}.mp4")
                 if not os.path.exists(loop):
-                    os.makedirs(stock, exist_ok=True)
+                    os.makedirs(self.stock, exist_ok=True)
                     visuals.neon_background(loop, 20, portrait, seed=3)
                 _fit_clip(loop, dur, clip, portrait, start=(i * 7.3) % 15)
-        # pair this segment's picture with its voice
-        seg_mp4 = os.path.join(work, f"s{i:02d}.mp4")
-        run([ffmpeg_path(), "-v", "error", "-y", "-i", clip, "-i", mp3, "-map", "0:v", "-map", "1:a",
-             "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-t", f"{dur:.3f}", seg_mp4], timeout=600)
+        info["keys"] = [k for k in info["keys"] if k]
+        return info
+
+
+def _pair(work, i, dur):
+    """Joins segment i's picture with its voice -> s{i}.mp4."""
+    seg_mp4 = os.path.join(work, f"s{i:02d}.mp4")
+    run([ffmpeg_path(), "-v", "error", "-y", "-i", os.path.join(work, f"c{i:02d}.mp4"), "-i", os.path.join(work, f"v{i:02d}.mp3"),
+         "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+         "-t", f"{dur:.3f}", seg_mp4], timeout=600)
+    return seg_mp4
+
+
+def build_original(s, segments, portrait, work, out_path, log=None):
+    """segments: [{"text", "visual"}]. Narrates, finds footage per segment, adds captions, renders."""
+    import json
+    os.makedirs(work, exist_ok=True)
+    fdir = os.path.join(work, "fonts")
+    if not os.path.isdir(fdir):
+        shutil.copytree(fonts_dir(), fdir)
+    parts, all_words, t0, chapters, segs = [], [], 0.0, [], []
+    ctx = _StockCtx(s, portrait, work, log, [seg.get("visual") or s["genre"] for seg in segments])
+    credits = []
+    for i, seg in enumerate(segments):
+        if log:
+            log("info", f"Voice + footage {i + 1}/{len(segments)}")
+        mp3 = os.path.join(work, f"v{i:02d}.mp3")
+        words = tts.speak(seg["text"], s["voice"], s.get("voice_rate", "+0%"), mp3)
+        dur = max(media_duration(mp3), 0.5) + 0.15
+        q = seg.get("visual") or s["genre"]
+        info = ctx.segment_clip(i, q, dur)
+        credits += info["credits"]
+        seg_mp4 = _pair(work, i, dur)
         parts.append(seg_mp4)
         all_words += [{"s": w["s"] + t0, "e": w["e"] + t0, "w": w["w"]} for w in words]
         chapters.append({"start": round(t0, 2), "chapter": (seg.get("chapter") or "").strip()})
+        segs.append({"text": seg["text"], "visual": q, "dur": dur, "start": t0, "info": info})
         t0 += media_duration(seg_mp4) or dur
     with open(os.path.join(work, "segments.json"), "w", encoding="utf-8") as f:
-        import json
         json.dump(chapters, f)
     _finish(s, parts, all_words, portrait, work, out_path)
-    return out_path, photos.credits + (footage.credits if footage else [])
+    credits = list(dict.fromkeys(credits + ctx.photos.credits))
+    with open(os.path.join(work, "edit.json"), "w", encoding="utf-8") as f:
+        json.dump({"style": "stock", "portrait": portrait, "segs": segs, "words": all_words, "credits": credits}, f)
+    return out_path, credits
+
+
+REEDIT_STOCK_PROMPT = """You are re-editing the FOOTAGE of a finished video. The voiceover stays exactly the same.
+The owner watched it and wants these changes:
+\"\"\"{instructions}\"\"\"
+
+The video's parts (#number, time, what the voice says, the footage search used, what was shown):
+{parts}
+
+Change ONLY the parts the owner's request is about (a named time -> the part covering it; described footage -> the parts showing it;
+a request about the whole video -> every part it applies to). Leave the others out of your answer.
+For each part you change give "visual": 2-5 concrete words to search stock footage for (things a camera can film), and
+"new_footage": true if it should be different footage than before.
+
+Return JSON: {{"changes": [{{"part": 3, "visual": "...", "new_footage": true}}], "summary": "one sentence on what you changed"}}"""
+
+
+def reedit_stock(s, work, out_path, instructions, log=None):
+    import json
+    try:
+        with open(os.path.join(work, "edit.json"), "r", encoding="utf-8") as f:
+            ed = json.load(f)
+    except (OSError, ValueError):
+        ed = None
+    if not ed or ed.get("style") != "stock":
+        raise RuntimeError("This video was made before re-editing existed (or its work files were cleaned up), so it can't be re-edited.")
+    segs = ed["segs"]
+    for i in range(len(segs)):
+        if not os.path.exists(os.path.join(work, f"v{i:02d}.mp3")):
+            raise RuntimeError("The voiceover files for this video are gone, so it can't be re-edited.")
+    lines = [f"#{i} {int(sg['start'] // 60)}:{int(sg['start'] % 60):02d} | \"{sg['text'][:120]}\" | search=\"{sg['visual']}\" "
+             f"(shown: {sg.get('info', {}).get('kind', '?')})" for i, sg in enumerate(segs)]
+    data = ai.parse_json(ai.ask(s["ai"], REEDIT_STOCK_PROMPT.format(instructions=instructions.strip()[:2000], parts="\n".join(lines)),
+                                json_mode=True))
+    changed, avoid = {}, set()
+    for ch in data.get("changes") or []:
+        try:
+            i = int(str(ch.get("part", ch.get("segment", -1))).lstrip("#"))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= i < len(segs):
+            changed[i] = (str(ch.get("visual") or segs[i]["visual"]).strip()[:80])
+            avoid |= set(segs[i].get("info", {}).get("keys") or [])
+    if not changed:
+        raise RuntimeError("The AI couldn't tell which part of the video to change. Try naming the time (e.g. 'at 0:12') "
+                           "or describing the footage.")
+    summary = str(data.get("summary") or f"changed {len(changed)} part(s)")[:300]
+    if log:
+        log("info", f"Re-editing {len(changed)} of {len(segs)} parts (voiceover kept): {summary}")
+    ctx = _StockCtx(s, ed["portrait"], work, log, list(changed.values()), avoid=avoid)
+    for i, q in changed.items():
+        info = ctx.segment_clip(i, q, segs[i]["dur"])
+        segs[i].update(visual=q, info=info)
+        _pair(work, i, segs[i]["dur"])
+    parts = [os.path.join(work, f"s{i:02d}.mp4") for i in range(len(segs))]
+    _finish(s, parts, ed["words"], ed["portrait"], work, out_path)
+    credits = list(dict.fromkeys(c for sg in segs for c in (sg.get("info") or {}).get("credits", [])))
+    ed.update(segs=segs, credits=credits)
+    with open(os.path.join(work, "edit.json"), "w", encoding="utf-8") as f:
+        json.dump(ed, f)
+    return out_path, credits, summary
 
 
 def _finish(s, parts, words, portrait, work, out_path):

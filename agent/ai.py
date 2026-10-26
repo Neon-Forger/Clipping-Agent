@@ -3,6 +3,7 @@ Used to pick the best moments, write hook titles and captions, and answer
 questions you send from the phone."""
 import json
 import re
+import time
 
 import requests
 
@@ -118,10 +119,73 @@ def _openai_like(base_url, key, model, prompt, json_mode, extra_headers=None):
     return r.json()["choices"][0]["message"]["content"]
 
 
+PROVIDERS = ["gemini", "nvidia", "openrouter", "openai_compatible"]
+KEY_FIELDS = ("gemini_api_key", "nvidia_api_key", "openrouter_api_key", "openai_compatible_api_key")
+NVIDIA_URL = "https://integrate.api.nvidia.com/v1"
+NVIDIA_PREFERRED = ["meta/llama-3.3-70b-instruct", "deepseek-ai/deepseek-v3.1", "moonshotai/kimi-k2-instruct",
+                    "nvidia/llama-3.3-nemotron-super-49b-v1.5", "nvidia/llama-3.3-nemotron-super-49b-v1",
+                    "qwen/qwen3-235b-a22b", "meta/llama-3.1-70b-instruct", "mistralai/mistral-large-2-instruct"]
+_nvidia_model = {}
+
+
+def has_key(cfg):
+    return any(cfg.get(k) for k in KEY_FIELDS)
+
+
+def nvidia_models(key):
+    r = requests.get(NVIDIA_URL + "/models", headers={"Authorization": f"Bearer {key}"}, timeout=30)
+    r.raise_for_status()
+    return [m.get("id") for m in r.json().get("data", []) if m.get("id")]
+
+
+def pick_nvidia_model(key):
+    """A good chat model that this NVIDIA key can use (the catalog changes over time)."""
+    ids = nvidia_models(key)
+    for want in NVIDIA_PREFERRED:
+        if want in ids:
+            return want
+    chat = [i for i in ids if "instruct" in i and not any(x in i for x in ("embed", "vision", "guard", "reward", "coder"))]
+    return chat[0] if chat else (ids[0] if ids else NVIDIA_PREFERRED[0])
+
+
+def _nvidia(cfg, prompt, json_mode):
+    key = cfg["nvidia_api_key"].strip()
+    model = (cfg.get("nvidia_model") or "auto").strip()
+    if model in ("", "auto"):
+        model = _nvidia_model.get(key) or pick_nvidia_model(key)
+        _nvidia_model[key] = model
+    for attempt in range(3):
+        try:
+            return _strip_think(_openai_like(NVIDIA_URL, key, model, prompt, json_mode))
+        except requests.HTTPError as e:
+            code = e.response.status_code if e.response is not None else 0
+            if code == 429 and attempt < 2:          # 40 requests/min per model on the free tier
+                time.sleep(min(30, float(e.response.headers.get("Retry-After") or 10)))
+                continue
+            if code in (404, 400, 410, 422) and attempt == 0 and "model" in (e.response.text or "").lower():
+                model = pick_nvidia_model(key)       # model retired or misspelled -> pick one that exists
+                _nvidia_model[key] = model
+                continue
+            raise
+    raise AIError("NVIDIA kept refusing requests")
+
+
+def _strip_think(text):
+    """Reasoning models (DeepSeek R1, Nemotron) may prepend <think>...</think>."""
+    return re.sub(r"<think>.*?</think>", "", text or "", flags=re.S).strip()
+
+
 def ask(cfg, prompt, json_mode=False):
     errors = []
-    for prov in cfg.get("provider_order") or ["gemini", "openrouter", "openai_compatible"]:
+    order = list(cfg.get("provider_order") or PROVIDERS)
+    order += [p for p in PROVIDERS if p not in order]        # providers added in newer versions
+    first = (cfg.get("first") or "").strip().lower()
+    if first in PROVIDERS:
+        order = [first] + [p for p in order if p != first]
+    for prov in order:
         try:
+            if prov == "nvidia" and cfg.get("nvidia_api_key"):
+                return _nvidia(cfg, prompt, json_mode)
             if prov == "gemini" and cfg.get("gemini_api_key"):
                 return _gemini(cfg, prompt, json_mode)
             if prov == "openrouter" and cfg.get("openrouter_api_key"):
@@ -136,11 +200,11 @@ def ask(cfg, prompt, json_mode=False):
             errors.append(f"{prov}: {e}")
     if errors:
         msg = " | ".join(errors)
-        for k in ("gemini_api_key", "openrouter_api_key", "openai_compatible_api_key"):
+        for k in KEY_FIELDS:
             if cfg.get(k):
                 msg = msg.replace(cfg[k], "***")
         raise AIError("All AI providers failed: " + msg)
-    raise NoAIKey("No AI API key set. Add a Gemini, OpenRouter or OpenAI-compatible key in Settings.")
+    raise NoAIKey("No AI API key set. Add a Gemini, NVIDIA, OpenRouter or OpenAI-compatible key in Settings.")
 
 
 def parse_json(text):

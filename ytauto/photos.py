@@ -38,9 +38,11 @@ class PhotoSource:
         self.why = {}              # provider -> last error
         self.got = {}              # provider -> photos used
         self._warned = False
+        self.last_key, self.last_credit = None, None
 
     # ------------------------------------------------------------------ public
     def get(self, query, portrait):
+        self.last_key, self.last_credit = None, None
         q = re.sub(r"\s+", " ", (query or self.s.get("genre") or "city")).strip()[:60]
         img = self._next_from_pool(q)
         if img is None and self.searches < self.MAX_SEARCHES and q not in self.pools:
@@ -100,6 +102,7 @@ class PhotoSource:
             if min(im.size) < 400:
                 return None
             self.used.add(c["key"])
+            self.last_key, self.last_credit = c["key"], c.get("credit")
             self.got[c["provider"]] = self.got.get(c["provider"], 0) + 1
             if c.get("credit"):
                 self.credits.append(c["credit"])

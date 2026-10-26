@@ -51,7 +51,9 @@ class FootageSource:
         self.cands = {}        # query -> candidate list
         self.slices = {}       # query -> [(clip_path, offset)]
         self.all_clips = []
-        self.used = set()
+        self.used = set()          # source keys already used (a re-edit pre-fills this to get different footage)
+        self.key_of = {}           # clip path -> source key
+        self.credit_of = {}        # clip path -> credit line
         self.credits = []
         self.searches = 0
         self.clips = 0
@@ -136,6 +138,9 @@ class FootageSource:
             got += 1
             with self.lock:
                 self.all_clips.append(path)
+                self.key_of[path] = c["key"]
+                if c.get("credit"):
+                    self.credit_of[path] = c["credit"]
                 self.slices.setdefault(q, []).extend([(path, 0.0), (path, 2.1), (path, 4.2)])
                 self.got[c["provider"]] = self.got.get(c["provider"], 0) + 1
                 if c.get("credit"):

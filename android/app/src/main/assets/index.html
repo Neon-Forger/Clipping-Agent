@@ -181,6 +181,7 @@
         <button onclick="cmd('yt train')">Training status</button>
       </div>
     </div>
+    <h3>🗓 SCHEDULE</h3><div id="y_sched"><p class="muted">Waiting for the PC...</p></div>
     <h3>LATEST</h3><div id="y_latest"></div>
   </section>
   <section id="y_feed" class="hide"><div id="y_feedList"></div></section>
@@ -194,6 +195,12 @@
       <label>Make one video about exactly this (topic, theme, details)</label>
       <textarea id="y_brief" placeholder="e.g. a Halloween special about the Dyatlov Pass incident, creepy tone, end with a question"></textarea><br><br>
       <div class="row"><button class="acc" onclick="makeYt('short', $('y_brief').value)">MAKE SHORT</button><button onclick="makeYt('long', $('y_brief').value)">Make long</button></div>
+    </div>
+    <div class="card">
+      <label>✏️ Re-edit a finished video (keeps the voiceover, redoes only the footage you describe)</label>
+      <input id="y_reId" type="number" placeholder="Video number, e.g. 17" style="margin-bottom:8px">
+      <textarea id="y_reText" placeholder="e.g. the clip at 0:12 shows a beach, use a dark foggy forest instead"></textarea><br><br>
+      <button class="acc" onclick="reeditYt()" style="width:100%">RE-EDIT</button>
     </div>
     <div class="card">
       <label>Visual style</label>
@@ -285,6 +292,34 @@ function makeYt(kind, brief) {
   if (brief === null) return;
   cmd(("yt make " + kind + " " + (brief || "")).trim()); if ($("y_brief")) $("y_brief").value = "";
 }
+function reeditYt(id, text) {
+  id = id || $("y_reId").value.trim();
+  if (text === undefined) text = $("y_reText").value.trim();
+  if (!id) { toast("Enter the video number"); return; }
+  if (!text) text = prompt("What should change in video #" + id + "? (the voiceover stays the same)");
+  if (!text) return;
+  cmd("yt reedit " + id + " " + text);
+  if ($("y_reText")) $("y_reText").value = "";
+}
+const SCHED_COLOR = {ready: "#3DDC84", editing: "#FF2BD6", making: "#FFD34D", planned: "#8AA0C4", posted: "#7FE9FF", new: "#8AA0C4", empty: "#FF4D6D"};
+function renderSched(rows) {
+  if (!rows || !rows.length) { $("y_sched").innerHTML = '<p class="muted">No posting times set (PC → YOUTUBE → SCHEDULE).</p>'; return; }
+  let html = "", lastDay = "";
+  for (const r of rows) {
+    const day = r.when_text.split(" ")[0];
+    if (day !== lastDay) { html += '<div class="muted" style="margin:10px 2px 4px;letter-spacing:1px">' + esc(day.toUpperCase()) + "</div>"; lastDay = day; }
+    const c = SCHED_COLOR[r.state] || "#E6F4FF";
+    const time = r.when_text.split(" ").slice(1).join(" ");
+    const title = r.id ? "#" + r.id + " " + esc(r.title || "(writing)") : esc(r.state_text);
+    const kind = r.kind ? '<span class="tag">' + (r.kind === "short" ? "SHORT" : "LONG") + "</span> " : "";
+    const btn = (r.id && r.state === "ready") ? '<button style="width:auto;padding:6px 10px;margin-top:6px" onclick="reeditYt(' + r.id + ')">✏️ Re-edit</button>' : "";
+    html += '<div class="card" style="border-left:4px solid ' + c + ';padding:10px 12px;margin-bottom:6px">' +
+      '<div style="display:flex;justify-content:space-between;gap:8px"><b style="color:#7FE9FF">' + esc(time) + '</b><span class="muted">' + esc(r.countdown) + "</span></div>" +
+      '<div style="margin-top:4px">' + kind + title + "</div>" +
+      (r.id ? '<div style="color:' + c + ';font-size:12px;margin-top:2px">● ' + esc(r.state_text) + "</div>" : "") + btn + "</div>";
+  }
+  $("y_sched").innerHTML = html;
+}
 function clipLink() { const u = $("clipUrl").value.trim(); if (!u) return; cmd("clip " + u + " " + ($("clipN").value || 5)); $("clipUrl").value = ""; }
 function askAI(prefix) { const q = prompt("Ask the AI:"); if (q) { cmd(prefix + "ask " + q); show("feed"); } }
 function login(service) {
@@ -328,6 +363,7 @@ function renderState() {
     $("y_pause").textContent = yState.paused ? "RESUME" : "PAUSE";
     $("y_train").textContent = yState.training_status || (yState.training ? "Training is on." : "Training is off.");
     $("y_trainBtn").textContent = yState.training ? "TURN OFF" : "TURN ON";
+    if (yState.schedule) renderSched(yState.schedule);
   }
   tickOnline();
 }

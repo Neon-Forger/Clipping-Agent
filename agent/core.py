@@ -487,7 +487,7 @@ class Agent:
                 return "Usage: set <setting> <value>"
             val = s.set(k, v.strip())
             self.wake.set()
-            return f"✔ {k} = {json.dumps(val) if k.split('.')[-1] not in ('gemini_api_key','openrouter_api_key','openai_compatible_api_key','token') else '(saved)'}"
+            return f"✔ {k} = {json.dumps(val) if k.split('.')[-1] not in ('gemini_api_key','nvidia_api_key','openrouter_api_key','openai_compatible_api_key','token') else '(saved)'}"
         if cmd == "get":
             v = s.get(arg)
             return f"{arg} = {json.dumps(v)[:1500]}" if v is not None else f"No setting named {arg}"

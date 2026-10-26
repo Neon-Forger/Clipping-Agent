@@ -389,6 +389,7 @@ class _Bg:
         self.photos, self.footage, self.portrait, self.genre = photos, footage, portrait, genre
         self.recent = []         # recent good still backgrounds
         self.counts = {"video": 0, "photo": 0, "ui": 0, "reused": 0, "gradient": 0, "black": 0}
+        self.credits_used = []
 
     def remember(self, img):
         self.recent.append(img)
@@ -414,16 +415,48 @@ def _gradient(w, h, seed):
 
 
 class _Beat:
-    def __init__(self, beat, dur, W, H, bgs, portrait, seed):
+    def __init__(self, beat, dur, W, H, bgs, portrait, seed, keep=None, bgdir=None):
+        """keep: what this beat used last time (re-edit of an unchanged beat). bgdir: where still backgrounds are saved."""
         self.b, self.dur, self.W, self.H, self.seed = beat, dur, W, H, seed
         bg = beat["bg"]
         g = beat.get("graphic")
         BW, BH = int(W * 1.06), int(H * 1.06)
         base, self.reader = None, None
-        if g and g["type"] in ("ring", "tier"):
+        self.resolved = {"kind": "none"}
+        if keep and keep.get("kind") == "video" and os.path.exists(keep.get("clip") or ""):
+            from .footage import ClipReader
+            self.reader = ClipReader(keep["clip"], keep.get("start") or 0, BW, BH)
+            base = self.reader.next()
+            if base is not None:
+                self.resolved = dict(keep)
+                bgs.counts["video"] += 1
+                bgs.credits_used += [keep["credit"]] if keep.get("credit") else []
+            else:
+                self.reader.close()
+                self.reader = None
+        elif keep and keep.get("kind") in ("still", "card") and os.path.exists(keep.get("path") or ""):
+            try:
+                ph = Image.open(keep["path"]).convert("RGB")
+                base = g_card(W, H, ph).convert("RGB") if keep["kind"] == "card" else ph
+                self.resolved = dict(keep)
+                bgs.counts["photo"] += 1
+                bgs.credits_used += [keep["credit"]] if keep.get("credit") else []
+                if keep["kind"] == "still":
+                    bgs.remember(base)
+            except Exception:
+                base = None
+        if base is not None:
+            pass
+        elif g and g["type"] in ("ring", "tier"):
             base = None
         elif g and g["type"] == "card":
-            base = g_card(W, H, bgs.photos.get(g.get("query") or beat["query"], portrait)).convert("RGB")
+            ph = bgs.photos.get(g.get("query") or beat["query"], portrait)
+            base = g_card(W, H, ph).convert("RGB")
+            if ph is not None and bgdir:
+                path = os.path.join(bgdir, f"b{seed:03d}.jpg")
+                ph.save(path, "JPEG", quality=90)
+                self.resolved = {"kind": "card", "path": path, "key": bgs.photos.last_key, "credit": bgs.photos.last_credit}
+                bgs.credits_used += [bgs.photos.last_credit] if bgs.photos.last_credit else []
         elif bg == "black":
             base = Image.new("RGB", (BW, BH), (0, 0, 0))
             bgs.counts["black"] += 1
@@ -442,6 +475,10 @@ class _Beat:
                         if first is not None:
                             base = first
                             bgs.counts["video"] += 1
+                            cr = bgs.footage.credit_of.get(got[0])
+                            self.resolved = {"kind": "video", "clip": got[0], "start": got[1],
+                                             "key": bgs.footage.key_of.get(got[0]), "credit": cr}
+                            bgs.credits_used += [cr] if cr else []
                             break
                         self.reader.close()
                         self.reader = None
@@ -451,12 +488,20 @@ class _Beat:
                         base = _cover(ph, BW, BH)
                         bgs.remember(base)
                         bgs.counts["photo"] += 1
+                        self.resolved = {"kind": "still", "key": bgs.photos.last_key, "credit": bgs.photos.last_credit}
+                        bgs.credits_used += [bgs.photos.last_credit] if bgs.photos.last_credit else []
                         break
             if base is None:
                 base = bgs.reuse(seed)
+                if base is not None:
+                    self.resolved = {"kind": "still", "key": None, "credit": None}
             if base is None:
                 base = _gradient(BW, BH, seed)
                 bgs.counts["gradient"] += 1
+            if self.resolved.get("kind") == "still" and bgdir:
+                path = os.path.join(bgdir, f"b{seed:03d}.jpg")
+                base.save(path, "JPEG", quality=90)
+                self.resolved["path"] = path
         self.base = base if base is not None else Image.new("RGB", (BW, BH), (0, 0, 0))
         self._first = True
         self.overlay = g_panel(W, H, g.get("text", ""), g.get("color", "#FF3B30")) if g and g["type"] == "panel" else None
@@ -562,7 +607,6 @@ def _popen_kwargs():
 def build(s, segments, portrait, work, out_path, log=None):
     """Narrates each segment, asks the AI for a beat-by-beat visual plan, draws every frame, and returns
     (out_path, credits) where credits lists photos that need attribution in the description."""
-    from .render import _finish   # captions / music / loudness / final encode
     os.makedirs(work, exist_ok=True)
     W, H = (1080, 1920) if portrait else (1920, 1080)
     segs, words_all, wavs, t0 = [], [], [], 0.0
@@ -589,30 +633,46 @@ def build(s, segments, portrait, work, out_path, log=None):
     if log:
         log("info", "AI planning the visuals")
     beats = plan(s, segs, log)
+    return render_visuals(s, {"style": "stickman", "portrait": portrait, "segs": segs, "beats": beats,
+                              "words": words_all, "resolved": None}, work, out_path, log)
+
+
+def render_visuals(s, ed, work, out_path, log=None, changed=None, avoid_keys=()):
+    """Draws the frames over the saved voice and finishes the video. ed = what edit.json holds.
+    On a re-edit, `changed` is the set of beat numbers to redo; every other beat keeps exactly the background it had."""
+    from .render import _finish
+    portrait, segs, beats = ed["portrait"], ed["segs"], ed["beats"]
+    W, H = (1080, 1920) if portrait else (1920, 1080)
+    old = ed.get("resolved") or []
+    redo = lambda n: changed is None or n in changed or n >= len(old)     # noqa: E731
+    flat = [b for bl in beats for b in bl]
     photos = PhotoSource(s, os.path.join(os.path.dirname(work), "_photos"), log)
+    photos.used |= set(avoid_keys)
     footage = None
-    vq = [b["query"] for bl in beats for b in bl if b["bg"] in ("video", "photo") and not b.get("graphic")]
-    vq_video = [b["query"] for bl in beats for b in bl if b["bg"] == "video" and not b.get("graphic")]
+    vq = [b["query"] for n, b in enumerate(flat) if redo(n) and b["bg"] in ("video", "photo") and not b.get("graphic")]
+    vq_video = [b["query"] for n, b in enumerate(flat) if redo(n) and b["bg"] == "video" and not b.get("graphic")]
     if s.get("stock_video", True) and vq:
         from .footage import FootageSource
         if log:
             log("info", "Searching free stock-video libraries for moving backgrounds")
         footage = FootageSource(s, os.path.join(os.path.dirname(work), "_footage"), log, (int(W * 1.06), int(H * 1.06)))
+        footage.used |= set(avoid_keys)
         try:
             footage.prefetch(vq_video or vq[:6], portrait)
         except Exception as e:
             if log:
                 log("warn", f"Stock video search failed ({e}); using photos.")
     bgs = _Bg(photos, footage, portrait, s.get("genre"))
+    bgdir = os.path.join(work, "bgs")
+    os.makedirs(bgdir, exist_ok=True)
 
     if log:
         log("info", "Drawing frames")
-    mux = os.path.join(work, "mux.mp4")
     cmd = [ffmpeg_path(), "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
            "-i", "voice.wav", "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest", "mux.mp4"]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE, cwd=work, **_popen_kwargs())
-    frame_no, seed = 0, 0
+    frame_no, seed, n_beat, resolved = 0, 0, 0, []
     try:
         for si, sg in enumerate(segs):
             n = len(beats[si])
@@ -621,9 +681,13 @@ def build(s, segments, portrait, work, out_path, log=None):
             for bi, b in enumerate(beats[si]):
                 seed += 1
                 nf = per[bi]
+                keep = None if redo(n_beat) else old[n_beat]
+                n_beat += 1
                 if nf <= 0:
+                    resolved.append(keep or {"kind": "none"})
                     continue
-                beat = _Beat(b, nf / FPS, W, H, bgs, portrait, seed)
+                beat = _Beat(b, nf / FPS, W, H, bgs, portrait, seed, keep=keep, bgdir=bgdir)
+                resolved.append(beat.resolved)
                 try:
                     for k in range(nf):
                         proc.stdin.write(beat.frame(k / FPS).tobytes())
@@ -654,5 +718,100 @@ def build(s, segments, portrait, work, out_path, log=None):
     if captions and not os.path.isdir(os.path.join(work, "fonts")):
         import shutil
         shutil.copytree(fonts_dir(), os.path.join(work, "fonts"))
-    _finish(_Override(s, captions=captions), [mux], words_all if captions else [], portrait, work, out_path)
-    return out_path, photos.credits + (footage.credits if footage else [])
+    _finish(_Override(s, captions=captions), [os.path.join(work, "mux.mp4")], ed["words"] if captions else [], portrait, work, out_path)
+    credits = list(dict.fromkeys(c for c in bgs.credits_used if c))
+    ed = dict(ed, resolved=resolved, credits=credits)
+    save_edit(work, ed)
+    return out_path, credits
+
+
+def save_edit(work, ed):
+    with open(os.path.join(work, "edit.json"), "w", encoding="utf-8") as f:
+        json.dump(ed, f)
+
+
+def load_edit(work):
+    try:
+        with open(os.path.join(work, "edit.json"), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+REEDIT_PROMPT = """You are re-editing the VISUALS of a finished short-form video. The voiceover stays exactly the same.
+The owner watched it and wants these changes:
+\"\"\"{instructions}\"\"\"
+
+Current visual plan, one beat per line (#number, time in the video, what the voice is saying, current background):
+{beats}
+
+Change ONLY the beats the owner's request is about (if they name a time, change the beats around that time; if they describe
+footage, find the beats that use it; if they ask for something across the whole video, change all the beats it applies to).
+Leave every other beat out of your answer so it stays exactly as it is.
+
+For each beat you change you may set any of:
+- bg: "video" (moving stock footage) / "photo" / "ui" / "black"; query: 2-4 concrete visual search words (things a camera can film)
+- new_footage: true  (same idea but different footage than before; use when the owner says a clip is bad/wrong/repetitive)
+- pose: {poses}; expression: {expressions}; placement: {placements}; motion: {motions}; zoom: {zooms}; character: true/false
+- graphic: null, or {{"type": "panel", "text": "...", "color": "#RRGGBB"}} / {{"type": "ring", "value": 0-100, "label": "..."}} /
+  {{"type": "tier", "rows": {{"S": [...], "A": [...], "B": [...], "C": [...]}}}} / {{"type": "card", "query": "..."}}
+
+Return JSON: {{"changes": [{{"beat": 12, "bg": "video", "query": "...", "new_footage": true}}], "summary": "one sentence on what you changed"}}"""
+
+
+def _fmt_t(sec):
+    return f"{int(sec // 60)}:{int(sec % 60):02d}"
+
+
+def reedit(s, work, out_path, instructions, log=None):
+    """Re-does only the visuals the owner asked about, keeping the voiceover and every other beat. Returns (path, credits, summary)."""
+    ed = load_edit(work)
+    if not ed or ed.get("style") != "stickman":
+        raise RuntimeError("This video was made before re-editing existed (or its work files were cleaned up), so it can't be re-edited.")
+    if not os.path.exists(os.path.join(work, "voice.wav")):
+        raise RuntimeError("The voiceover file for this video is gone, so it can't be re-edited.")
+    lines, n, old = [], 0, ed.get("resolved") or []
+    for si, sg in enumerate(ed["segs"]):
+        k = len(ed["beats"][si])
+        for bi, b in enumerate(ed["beats"][si]):
+            t0 = sg["start"] + sg["dur"] * bi / k
+            t1 = sg["start"] + sg["dur"] * (bi + 1) / k
+            used = (old[n] if n < len(old) else {}).get("kind", "?")
+            g = b.get("graphic")
+            lines.append(f"#{n} {_fmt_t(t0)}-{_fmt_t(t1)} | \"{sg['text'][:90]}\" | bg={b['bg']} query=\"{b['query']}\" (shown: {used})"
+                         + (f" graphic={json.dumps(g)}" if g else "") + f" pose={b['pose']} character={b['character']}")
+            n += 1
+    prompt = REEDIT_PROMPT.format(instructions=instructions.strip()[:2000], beats="\n".join(lines), poses=", ".join(POSES),
+                                  expressions=", ".join(EXPRESSIONS), placements=", ".join(PLACEMENTS),
+                                  motions=", ".join(MOTIONS), zooms=", ".join(ZOOMS))
+    data = ai.parse_json(ai.ask(s["ai"], prompt, json_mode=True))
+    flat = [(si, bi) for si, bl in enumerate(ed["beats"]) for bi in range(len(bl))]
+    changed, avoid = set(), set()
+    rnd = random.Random(7)
+    for ch in data.get("changes") or []:
+        try:
+            num = int(str(ch.get("beat", ch.get("index", -1))).lstrip("#"))
+        except (TypeError, ValueError):
+            continue
+        if not 0 <= num < len(flat):
+            continue
+        si, bi = flat[num]
+        b = dict(ed["beats"][si][bi])
+        for key in ("bg", "query", "pose", "expression", "placement", "motion", "zoom", "character", "graphic"):
+            if key in ch:
+                b[key] = ch[key]
+        fixed = _clean_beat(b, rnd, ed["segs"][si]["text"])
+        if "query" in ch:
+            fixed["query_given"] = True
+        ed["beats"][si][bi] = fixed
+        changed.add(num)
+        if num < len(old) and old[num].get("key"):
+            avoid.add(old[num]["key"])        # never put the same footage back
+    if not changed:
+        raise RuntimeError("The AI couldn't tell which part of the video to change. Try naming the time (e.g. 'at 0:12') "
+                           "or describing the footage (e.g. 'the clip of the empty road').")
+    summary = str(data.get("summary") or f"changed {len(changed)} beat(s)")[:300]
+    if log:
+        log("info", f"Re-editing {len(changed)} of {len(flat)} beats (voiceover kept): {summary}")
+    path, credits = render_visuals(s, ed, work, out_path, log, changed=changed, avoid_keys=avoid)
+    return path, credits, summary

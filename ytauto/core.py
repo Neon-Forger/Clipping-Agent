@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS items (
   title TEXT, description TEXT, tags TEXT, thumb_text TEXT,
   source_url TEXT, source_note TEXT,
   file TEXT, thumb TEXT,
-  status TEXT,          -- planned, making, ready, uploading, uploaded, failed, skipped
+  status TEXT,          -- planned, making, ready, editing, uploading, uploaded, failed, skipped
   url TEXT, error TEXT, created REAL, uploaded_at REAL
 );
 CREATE TABLE IF NOT EXISTS used_sources (video_id TEXT PRIMARY KEY, used REAL);
@@ -38,6 +38,9 @@ status · pause · resume · make long [what it's about] · make short [what it'
 style stickman / style stock (switch the visual style) · visual <direction> (set the visual direction)
 train on / train off (training mode) · learn (learn from your best videos now) · stats (best videos by views)
 upload (upload the next finished video now) · list · skip <id> · retry <id>
+reedit <id> <what to change> (keeps the voiceover, redoes only the footage you describe)
+  e.g. "reedit 17 the clip at 0:12 shows a beach, use a dark forest instead"
+schedule (when each video will be posted)
 set <setting> <value> · get <setting> · settings · prompt <text> · ask <question>"""
 
 
@@ -56,7 +59,7 @@ class YTAgent:
                     self.conn.execute(f"ALTER TABLE items ADD COLUMN {col} {typ}")
             # videos that were being made when NeonClip was closed start over
             self.conn.execute("UPDATE items SET status='planned' WHERE status='making'")
-            self.conn.execute("UPDATE items SET status='ready' WHERE status='uploading'")
+            self.conn.execute("UPDATE items SET status='ready' WHERE status IN ('uploading','editing')")
             self.conn.commit()
         self.state_path = os.path.join(data_dir(), "youtube_state.json")
         try:
@@ -71,6 +74,7 @@ class YTAgent:
         self._stop = threading.Event()
         self.browser_lock = threading.Lock()
         self.upload_now = False
+        self.reedits = []                 # [(item id, what to change)] waiting for the maker thread
 
     # ------------------------------------------------------------ helpers
     def q(self, sql, args=()):
@@ -128,7 +132,15 @@ class YTAgent:
                 "uploaded": c.get("uploaded", 0), "failed": c.get("failed", 0),
                 "next_upload": nxt.strftime("%a %I:%M %p") if nxt else None,
                 "training": bool((self.s.get("training") or {}).get("enabled")), "training_status": training.status_line(self.s),
+                "schedule": [dict({k: r[k] for k in ("when_text", "countdown", "state", "state_text", "id", "kind")},
+                                  title=(r["title"] or "")[:60]) for r in self._safe_schedule()[:8]],
                 "updated": dt.datetime.now().strftime("%I:%M %p")}
+
+    def _safe_schedule(self):
+        try:
+            return self.schedule(days=3)
+        except Exception:
+            return []
 
     def status_text(self):
         st = self.status()
@@ -229,13 +241,17 @@ class YTAgent:
             try:
                 if self.active:
                     self._plan_today_if_due()
-                    has_key = any(self.s["ai"].get(k) for k in ("gemini_api_key", "openrouter_api_key", "openai_compatible_api_key"))
+                    has_key = ai.has_key(self.s["ai"])
                     nxt = self.q("SELECT * FROM items WHERE status='planned' ORDER BY id LIMIT 1") if has_key else []
                     if not has_key and not self.state.get("ai_warned"):
                         self.state["ai_warned"] = True
                         self.save_state()
                         self.log("warn", "Add an AI key in YouTube → Settings so I can write videos.", notify=True,
                                  title="🔑 AI key needed", priority=4)
+                    if self.reedits and has_key:
+                        iid, instr = self.reedits.pop(0)
+                        self._do_reedit(iid, instr)
+                        continue
                     if nxt:
                         self.make(nxt[0])
                     self._cleanup()
@@ -329,6 +345,84 @@ class YTAgent:
                 "training": bool((self.s.get("training") or {}).get("enabled"))}
         return {"title": title, "description": self._footer(desc), "tags": json.dumps(sc.get("tags") or []),
                 "thumb_text": sc.get("thumbnail_text", ""), "file": out, "thumb": thumb, "meta": json.dumps(meta)}
+
+    # -------------------------------------------------------------- re-edit
+    REEDITABLE = ("ready", "skipped", "failed")
+
+    def can_reedit(self, it):
+        if not it:
+            return "No such video."
+        if it["status"] == "uploaded":
+            return "That video is already on YouTube. YouTube doesn't allow replacing an uploaded video's file."
+        if it["status"] not in self.REEDITABLE:
+            return f"Video #{it['id']} is {it['status']} right now."
+        if it.get("mode") == "repurpose":
+            return "Re-editing works for original videos (stickman or stock style), not repurposed clips."
+        if not (it.get("file") and os.path.exists(it["file"])):
+            return f"Video #{it['id']}'s file is missing."
+        if not os.path.exists(os.path.join(data_dir(), "yt-work", str(it["id"]), "edit.json")):
+            return (f"Video #{it['id']} was made before re-editing existed (or its work files were cleaned up), "
+                    "so it can only be remade from scratch.")
+        return None
+
+    def request_reedit(self, iid, instructions):
+        it = self.item(iid)
+        why = self.can_reedit(it)
+        if why:
+            return "✏️ " + why
+        if not instructions.strip():
+            return "✏️ Say what to change, e.g. 'the clip at 0:12 is a beach, use a dark forest instead'."
+        self.update(iid, status="editing", error=None)
+        self.state.setdefault("reedit_from", {})[str(iid)] = it["status"]
+        self.save_state()
+        self.reedits.append((iid, instructions.strip()))
+        self.wake.set()
+        self.push_state()
+        return (f"✏️ Re-editing #{iid} (keeping the voiceover): {instructions.strip()[:150]}"
+                + (" (after the video that's being made now)" if self.task.startswith(("making", "writing")) else ""))
+
+    def _do_reedit(self, iid, instructions):
+        it = self.item(iid)
+        prev = self.state.get("reedit_from", {}).pop(str(iid), "ready")
+        self.save_state()
+        if not it:
+            return
+        work = self._work(iid)
+        self.set_task(f"re-editing: {(it['title'] or '')[:40]}")
+        stem = re.sub(r" \(re-edit( \d+)?\)$", "", os.path.splitext(it["file"])[0])
+        n = int(json.loads(it.get("meta") or "{}").get("reedit_count", 0)) + 1
+        tmp = f"{stem} (re-edit {n}).mp4"
+        try:
+            ed = stickman.load_edit(work) or {}
+            if ed.get("style") == "stickman":
+                _, credits, summary = stickman.reedit(self.s, work, tmp, instructions, log=self.log)
+            else:
+                _, credits, summary = render.reedit_stock(self.s, work, tmp, instructions, log=self.log)
+        except Exception as e:
+            self.update(iid, status=prev if prev in self.REEDITABLE else "ready")
+            self.log("error", f"Re-edit of #{iid} failed: {e}", notify=True, title="⚠️ Re-edit failed")
+            logging.error(traceback.format_exc())
+            self.push_state()
+            return
+        try:                                   # remove the old version (fails if it's open in a player: then it stays)
+            os.remove(it["file"])
+        except OSError:
+            pass
+        meta = json.loads(it.get("meta") or "{}")
+        meta["reedit_count"] = n
+        meta.setdefault("reedits", []).append(instructions[:300])
+        meta["duration"] = round(_dur(tmp), 1)
+        desc = _replace_credits(it.get("description") or "", credits)
+        thumb = it.get("thumb")
+        if it["kind"] != "short" and not self.s["thumbnails"].get("ai_images"):
+            try:
+                thumb = self._thumbnail(it["title"] or "", it.get("thumb_text") or it["title"] or "", tmp, work)
+            except Exception:
+                pass
+        self.update(iid, status="ready", file=tmp, description=desc, meta=json.dumps(meta), thumb=thumb)
+        self.log("info", f"✏️ Re-edited #{iid}: {summary}\nWatch it, then upload it or re-edit again.", notify=True,
+                 title="✏️ Re-edit ready")
+        self.push_state()
 
     def _thumbnail(self, title, text, video, work):
         bg = None
@@ -468,6 +562,70 @@ class YTAgent:
                 return cand
         return None
 
+    def schedule(self, days=3):
+        """Upcoming upload slots with the video expected in each (for the SCHEDULE tab / phone), plus today's posts."""
+        now = dt.datetime.now()
+        today = now.date()
+        times = sorted(self.s["daily"]["upload_times"] or ["12:00"], key=lambda x: self._hm(x))
+        done = set(self.state.get("slots_done", {}).get(today.isoformat(), []))
+        rows = []
+        start_today = dt.datetime.combine(today, dt.time(0, 0)).timestamp()
+        for it in self.q("SELECT * FROM items WHERE status='uploaded' AND uploaded_at >= ? ORDER BY uploaded_at", (start_today,)):
+            w = dt.datetime.fromtimestamp(it["uploaded_at"])
+            rows.append(self._slot_row(w, it, "posted", now))
+        order = {"ready": 0, "editing": 0, "making": 1, "planned": 2}
+        queue = sorted(self.q("SELECT * FROM items WHERE status IN ('ready','editing','making','planned')"),
+                       key=lambda r: (order[r["status"]], r["id"]))
+        n_daily = int(self.s["daily"].get("long_videos") or 0) + int(self.s["daily"].get("shorts") or 0)
+        mh, mm = self._hm(self.s["daily"]["make_at"])
+        planned_today = self.state.get("planned_day") == today.isoformat()
+        new_budget = {}
+        for off in range(days):
+            d = today + dt.timedelta(days=off)
+            if off > 0 or not planned_today:
+                new_budget[d] = n_daily
+            for tm in times:
+                h, m = self._hm(tm)
+                when = dt.datetime.combine(d, dt.time(h, m))
+                if off == 0 and (tm in done or when < now - dt.timedelta(hours=3)):
+                    continue
+                if queue:
+                    it = queue.pop(0)
+                    rows.append(self._slot_row(when, it, it["status"], now))
+                elif new_budget.get(d, 0) > 0 and when.time() > dt.time(mh, mm):
+                    new_budget[d] -= 1
+                    rows.append(self._slot_row(when, None, "new", now,
+                                               f"New video, made at {dt.time(mh, mm).strftime('%I:%M %p').lstrip('0')} that day"))
+                else:
+                    rows.append(self._slot_row(when, None, "empty", now, "Nothing ready for this slot"))
+        return rows
+
+    @staticmethod
+    def _slot_row(when, it, state, now, text=None):
+        delta = when - now
+        mins = int(delta.total_seconds() // 60)
+        if state == "posted":
+            countdown = "posted"
+        elif mins < 0:
+            countdown = "due now"
+        elif mins < 60:
+            countdown = f"in {mins} min"
+        elif mins < 24 * 60:
+            countdown = f"in {mins // 60} h {mins % 60:02d} min"
+        else:
+            countdown = f"in {mins // 1440} d {(mins % 1440) // 60} h"
+        day = (when.date() - now.date()).days
+        day_label = "Today" if day == 0 else "Tomorrow" if day == 1 else when.strftime("%A")
+        labels = {"ready": "Ready", "editing": "Re-editing", "making": "Being made", "planned": "Waiting to be made",
+                  "posted": "Posted", "new": "Will be made", "empty": "Empty"}
+        return {"when": when.isoformat(timespec="minutes"), "day": when.date().isoformat(), "day_label": day_label,
+                "date_text": when.strftime("%b %d").replace(" 0", " "), "time_text": when.strftime("%I:%M %p").lstrip("0"),
+                "when_text": f"{day_label} {when.strftime('%I:%M %p').lstrip('0')}", "countdown": countdown,
+                "state": state, "state_text": text or labels.get(state, state),
+                "id": it["id"] if it else None, "title": (it.get("title") if it else None) or ("(writing)" if it else None),
+                "kind": it["kind"] if it else None, "url": it.get("url") if it else None,
+                "file": it.get("file") if it else None}
+
     def _upload_loop(self):
         while not self._stop.is_set():
             try:
@@ -593,6 +751,23 @@ class YTAgent:
         if cmd == "visual":
             s.set("visual_instructions", "" if arg.lower() == "clear" else arg, raw=True)
             return "✔ Visual direction " + ("cleared." if arg.lower() == "clear" else "saved. New videos will follow it.")
+        if cmd in ("reedit", "re-edit", "edit"):
+            m = re.match(r"#?(\d+)\s*[:,-]?\s*(.*)$", arg, re.S)
+            if not m:
+                return "Use: reedit <video number> <what to change>"
+            return self.request_reedit(int(m.group(1)), m.group(2))
+        if cmd == "schedule":
+            rows = self.schedule(days=3)
+            if not rows:
+                return "🗓 No upload times set (CONTENT → upload times)."
+            out = []
+            for r in rows[:12]:
+                if r.get("id"):
+                    what = f"#{r['id']} {r['title'] or '(writing)'} [{r['state']}]"
+                else:
+                    what = r["state_text"]
+                out.append(f"{r['when_text']} · {what}")
+            return "🗓 Schedule\n" + "\n".join(out)
         if cmd == "upload":
             self.upload_now = True
             return "📺 Uploading the next finished video now."
@@ -687,6 +862,17 @@ def _dur(path):
 
 def _safe(name):
     return re.sub(r'[<>:"/\\|?*\n\r\t]', "", name or "").strip()[:80] or "video"
+
+
+def _replace_credits(desc, credits):
+    """Swaps the 'Stock media credits:' line for the new list (keeps everything else in the description)."""
+    line = ("Stock media credits: " + "; ".join(dict.fromkeys(credits))).replace("<", "(").replace(">", ")") if credits else ""
+    if line and len(line) > 2500:
+        line = line[:2490].rsplit(";", 1)[0] + " …"
+    if re.search(r"^Stock media credits: .*$", desc, flags=re.M):
+        out = re.sub(r"^Stock media credits: .*$", lambda m: line, desc, count=1, flags=re.M)
+        return re.sub(r"\n{3,}", "\n\n", out).strip()
+    return (desc + ("\n\n" + line if line else "")).strip()
 
 
 def _chapters(work):

@@ -46,7 +46,17 @@ class Ntfy:
 
     def send_data(self, kind, data):
         """Structured data for the phone app (not shown as a notification there)."""
-        body = {"topic": self.cfg["topic"], "title": f"__{kind}__", "message": json.dumps(data, separators=(",", ":"))[:3950],
+        msg = json.dumps(data, separators=(",", ":"))
+        if len(msg) > 3950 and isinstance(data, dict):      # never cut JSON in half: shorten the longest list instead
+            data = dict(data)
+            while len(msg) > 3950:
+                lists = [k for k, v in data.items() if isinstance(v, list) and v]
+                if not lists:
+                    break
+                k = max(lists, key=lambda k: len(json.dumps(data[k])))
+                data[k] = data[k][:-1]
+                msg = json.dumps(data, separators=(",", ":"))
+        body = {"topic": self.cfg["topic"], "title": f"__{kind}__", "message": msg[:3950],
                 "priority": 1, "tags": ["robot"]}
         try:
             requests.post(self.cfg["server"].rstrip("/"), json=body, headers=self._headers(), timeout=20)

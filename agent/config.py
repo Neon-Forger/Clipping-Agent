@@ -45,9 +45,12 @@ DEFAULTS = {
     "check_sources_every_minutes": 60,
     # ---- AI ----
     "ai": {
-        "provider_order": ["gemini", "openrouter", "openai_compatible"],
+        "provider_order": ["gemini", "nvidia", "openrouter", "openai_compatible"],
+        "first": "",                  # provider to try first (blank = provider_order)
         "gemini_api_key": "",
         "gemini_model": "auto",       # "auto" picks the newest available flash model
+        "nvidia_api_key": "",         # free key from build.nvidia.com (starts with nvapi-)
+        "nvidia_model": "auto",       # "auto" picks a good chat model the key can use
         "openrouter_api_key": "",
         "openrouter_model": "openrouter/auto",
         "openai_compatible_base_url": "https://api.openai.com/v1",
@@ -111,7 +114,7 @@ DEFAULTS = {
     },
 }
 
-SECRET_KEYS = {"gemini_api_key", "openrouter_api_key", "openai_compatible_api_key", "token", "pair_code",
+SECRET_KEYS = {"gemini_api_key", "nvidia_api_key", "openrouter_api_key", "openai_compatible_api_key", "token", "pair_code",
                "pexels_api_key", "pixabay_api_key", "unsplash_access_key"}
 
 _lock = threading.RLock()
