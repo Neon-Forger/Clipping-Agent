@@ -299,6 +299,10 @@ class ClippingView:
                 except ValueError:
                     continue
             self.agent.settings.set(key, val)
+        for key, (v, kind) in self.set_vars.items():    # show keys that were moved to the right box
+            if key.startswith("ai.") and kind != "bool":
+                val = self.agent.settings.get(key)
+                v.set("" if val is None else str(val))
         self._apply_startup()
         self.agent.wake.set()
         messagebox.showinfo("Saved", "Settings saved.")

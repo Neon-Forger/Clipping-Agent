@@ -150,7 +150,7 @@ class Settings:
 
     def after_load(self):
         """Fix-ups after loading; returns True if something changed and should be saved."""
-        changed = False
+        changed = self._fix_ai_boxes()
         if "ai" in self.data:
             if self.data["ai"].get("gemini_model") in ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"):
                 self.data["ai"]["gemini_model"] = "auto"
@@ -214,8 +214,36 @@ class Settings:
                 cur[int(last)] = value
             else:
                 cur[last] = value
+            if parts[0] == "ai":
+                self._fix_ai_boxes()
             self.save()
         return value
+
+    def _fix_ai_boxes(self):
+        """Moves API keys pasted into the wrong box to the right one (returns True if anything moved)."""
+        a = self.data.get("ai")
+        if not isinstance(a, dict):
+            return False
+        changed = False
+        first = str(a.get("first") or "").strip()
+        if first and first.lower() not in ("gemini", "nvidia", "openrouter", "openai_compatible"):
+            if first.startswith("nvapi-") and not a.get("nvidia_api_key"):
+                a["nvidia_api_key"] = first
+            a["first"] = "nvidia" if first.startswith("nvapi-") else ""
+            changed = True
+        other = str(a.get("openai_compatible_api_key") or "").strip()
+        default_url = str(a.get("openai_compatible_base_url") or "https://api.openai.com/v1").rstrip("/") == "https://api.openai.com/v1"
+        for prefix, field in (("nvapi-", "nvidia_api_key"), ("sk-or-", "openrouter_api_key")):
+            if other.startswith(prefix) and default_url:
+                if not a.get(field):
+                    a[field] = other
+                a["openai_compatible_api_key"] = ""
+                changed = True
+        for k in ("gemini_api_key", "nvidia_api_key", "openrouter_api_key", "openai_compatible_api_key"):
+            if isinstance(a.get(k), str) and a[k] != a[k].strip():
+                a[k] = a[k].strip()
+                changed = True
+        return changed
 
     def replace_all(self, new_data):
         with _lock:

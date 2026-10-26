@@ -759,6 +759,10 @@ class YouTubeView:
                 except ValueError:
                     continue
             self.yt.s.set(key, val)
+        for key, (v, kind) in self.svars.items():       # show keys that were moved to the right box
+            if key.startswith("ai.") and kind != "bool":
+                val = self.yt.s.get(key)
+                v.set("" if val is None else str(val))
         if self.yt.s["paused"] and ai.has_key(self.yt.s["ai"]):
             self.yt.state.pop("ai_warned", None)
         self.yt.wake.set()

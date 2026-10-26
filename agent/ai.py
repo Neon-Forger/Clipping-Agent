@@ -129,7 +129,7 @@ _nvidia_model = {}
 
 
 def has_key(cfg):
-    return any(cfg.get(k) for k in KEY_FIELDS)
+    return any(cfg.get(k) for k in KEY_FIELDS) or str(cfg.get("first") or "").startswith("nvapi-")
 
 
 def nvidia_models(key):
@@ -148,26 +148,124 @@ def pick_nvidia_model(key):
     return chat[0] if chat else (ids[0] if ids else NVIDIA_PREFERRED[0])
 
 
+def _err_detail(e):
+    """The service's own explanation from an HTTP error, shortened."""
+    try:
+        body = e.response.json()
+        msg = body.get("detail") or body.get("error") or body.get("message") or body
+        if isinstance(msg, dict):
+            msg = msg.get("message") or msg
+        return str(msg)[:160]
+    except Exception:
+        return (getattr(e.response, "text", "") or "")[:160]
+
+
 def _nvidia(cfg, prompt, json_mode):
     key = cfg["nvidia_api_key"].strip()
-    model = (cfg.get("nvidia_model") or "auto").strip()
-    if model in ("", "auto"):
-        model = _nvidia_model.get(key) or pick_nvidia_model(key)
-        _nvidia_model[key] = model
-    for attempt in range(3):
-        try:
-            return _strip_think(_openai_like(NVIDIA_URL, key, model, prompt, json_mode))
-        except requests.HTTPError as e:
-            code = e.response.status_code if e.response is not None else 0
-            if code == 429 and attempt < 2:          # 40 requests/min per model on the free tier
-                time.sleep(min(30, float(e.response.headers.get("Retry-After") or 10)))
-                continue
-            if code in (404, 400, 410, 422) and attempt == 0 and "model" in (e.response.text or "").lower():
-                model = pick_nvidia_model(key)       # model retired or misspelled -> pick one that exists
+    want = (cfg.get("nvidia_model") or "auto").strip()
+    tried, last = [], None
+    cands = [want] if want not in ("", "auto") else []
+    if _nvidia_model.get(key):
+        cands.append(_nvidia_model[key])
+    listed = None
+    for _ in range(6):                        # a model can be listed yet not usable by this key: try the next one
+        if not cands:
+            if listed is None:
+                try:
+                    listed = nvidia_models(key)
+                except Exception:
+                    listed = []
+                pref = [m for m in NVIDIA_PREFERRED if m in listed] or NVIDIA_PREFERRED[:4]
+                rest = [m for m in listed if "instruct" in m and m not in pref and not any(
+                    x in m for x in ("embed", "vision", "guard", "reward", "coder", "vl", "safety"))]
+                cands = pref + rest[:4]
+            cands = [m for m in cands if m not in tried]
+            if not cands:
+                break
+        model = cands.pop(0)
+        if model in tried:
+            continue
+        tried.append(model)
+        for attempt in range(3):
+            try:
+                out = _strip_think(_openai_like(NVIDIA_URL, key, model, prompt, json_mode))
                 _nvidia_model[key] = model
-                continue
+                return out
+            except requests.HTTPError as e:
+                code = e.response.status_code if e.response is not None else 0
+                last = f"{code} {_err_detail(e)}"
+                if code == 429 and attempt < 2:      # 40 requests/min per model on the free tier
+                    time.sleep(min(30, float(e.response.headers.get("Retry-After") or 10)))
+                    continue
+                if code in (401, 403):
+                    raise AIError(f"NVIDIA rejected the key ({last}). Copy it again from build.nvidia.com.")
+                if code in (404, 400, 410, 422, 429, 500, 502, 503):
+                    break                            # this model isn't usable right now: next model
+                raise
+    if last and "not found for account" in last.lower():
+        raise AIError("NVIDIA says this key can't use any chat model (\"Function not found for account\"). "
+                      "On build.nvidia.com make a new API key with \"Public API Endpoints\" ticked, and paste it in. "
+                      f"Tried: {', '.join(tried)}")
+    raise AIError(f"NVIDIA: no model worked ({last}). Tried: {', '.join(tried)}")
+
+
+OPENROUTER_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_FREE = ["deepseek/deepseek-chat-v3-0324:free", "meta-llama/llama-3.3-70b-instruct:free",
+                   "qwen/qwen3-235b-a22b:free", "google/gemma-3-27b-it:free", "mistralai/mistral-small-3.2-24b-instruct:free"]
+_or_free = {}
+
+
+def _openrouter(cfg, prompt, json_mode):
+    key = cfg["openrouter_api_key"].strip()
+    hdr = {"HTTP-Referer": "https://github.com/Neon-Forger/clipping-agent", "X-Title": "NeonClip"}
+    model = (cfg.get("openrouter_model") or "openrouter/auto").strip()
+    if _or_free.get(key):
+        model = _or_free[key]
+    try:
+        return _strip_think(_openai_like(OPENROUTER_URL, key, model, prompt, json_mode, hdr))
+    except requests.HTTPError as e:
+        code = e.response.status_code if e.response is not None else 0
+        if code not in (402, 404, 429) and not (code == 400 and "credit" in (e.response.text or "").lower()):
             raise
-    raise AIError("NVIDIA kept refusing requests")
+        first_err = f"{code} {_err_detail(e)}"
+    # no credits (402) or model gone: use OpenRouter's free models instead
+    try:
+        r = requests.get(OPENROUTER_URL + "/models", timeout=30)
+        listed = [m["id"] for m in r.json().get("data", []) if str(m.get("id", "")).endswith(":free")]
+    except Exception:
+        listed = []
+    cands = [m for m in OPENROUTER_FREE if not listed or m in listed] + [m for m in listed if m not in OPENROUTER_FREE][:4]
+    last = first_err
+    for m in cands[:6]:
+        if m == model:
+            continue
+        try:
+            out = _strip_think(_openai_like(OPENROUTER_URL, key, m, prompt, json_mode, hdr))
+            _or_free[key] = m
+            return out
+        except requests.HTTPError as e:
+            last = f"{e.response.status_code if e.response is not None else '?'} {_err_detail(e)}"
+            continue
+    raise AIError(f"OpenRouter: {first_err} (paid models need credits on openrouter.ai), and the free models were busy or "
+                  f"unavailable ({last}).")
+
+
+def _fix_boxes(cfg):
+    """Keys pasted into the wrong box still work: an nvapi- key in 'Other API key' or 'Use this AI first', an OpenRouter key in 'Other'."""
+    c = dict(cfg)
+    other = (c.get("openai_compatible_api_key") or "").strip()
+    default_url = (c.get("openai_compatible_base_url") or "https://api.openai.com/v1").rstrip("/") == "https://api.openai.com/v1"
+    first = (c.get("first") or "").strip()
+    if first.startswith("nvapi-"):
+        c["nvidia_api_key"] = c.get("nvidia_api_key") or first
+        c["first"] = "nvidia"
+    if other.startswith("nvapi-") and default_url:
+        c["nvidia_api_key"] = c.get("nvidia_api_key") or other
+        c["openai_compatible_api_key"] = ""
+    if other.startswith("sk-or-") and default_url:
+        c["openrouter_api_key"] = c.get("openrouter_api_key") or other
+        c["openai_compatible_api_key"] = ""
+    return c
 
 
 def _strip_think(text):
@@ -176,6 +274,8 @@ def _strip_think(text):
 
 
 def ask(cfg, prompt, json_mode=False):
+    secrets = [str(cfg.get(k)) for k in KEY_FIELDS + ("first",) if len(str(cfg.get(k) or "").strip()) >= 8]
+    cfg = _fix_boxes(cfg)
     errors = []
     order = list(cfg.get("provider_order") or PROVIDERS)
     order += [p for p in PROVIDERS if p not in order]        # providers added in newer versions
@@ -189,9 +289,7 @@ def ask(cfg, prompt, json_mode=False):
             if prov == "gemini" and cfg.get("gemini_api_key"):
                 return _gemini(cfg, prompt, json_mode)
             if prov == "openrouter" and cfg.get("openrouter_api_key"):
-                return _openai_like("https://openrouter.ai/api/v1", cfg["openrouter_api_key"],
-                                    cfg.get("openrouter_model") or "openrouter/auto", prompt, json_mode,
-                                    {"HTTP-Referer": "https://github.com/Neon-Forger/clipping-agent", "X-Title": "NeonClip"})
+                return _openrouter(cfg, prompt, json_mode)
             if prov == "openai_compatible" and cfg.get("openai_compatible_api_key"):
                 return _openai_like(cfg.get("openai_compatible_base_url") or "https://api.openai.com/v1",
                                     cfg["openai_compatible_api_key"], cfg.get("openai_compatible_model") or "gpt-4o-mini",
@@ -200,9 +298,8 @@ def ask(cfg, prompt, json_mode=False):
             errors.append(f"{prov}: {e}")
     if errors:
         msg = " | ".join(errors)
-        for k in KEY_FIELDS:
-            if cfg.get(k):
-                msg = msg.replace(cfg[k], "***")
+        for sec in secrets:
+            msg = msg.replace(sec.strip(), "***")
         raise AIError("All AI providers failed: " + msg)
     raise NoAIKey("No AI API key set. Add a Gemini, NVIDIA, OpenRouter or OpenAI-compatible key in Settings.")
 
