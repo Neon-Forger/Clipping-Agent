@@ -50,6 +50,9 @@ DEFAULTS = {
     "stickman_captions": False,     # burn word captions in the stickman style
     "stock_video": True,            # search free stock-video libraries on the web for moving backgrounds
     "max_black_percent": 5,         # most beats allowed to be plain black
+    "pace": "auto",                 # auto | fast | calm | cinematic — how long each shot is held (slower = calmer, longer videos)
+    "stickman_backgrounds": "stock",# stock = footage/photos | drawn = hand-drawn doodle scenes in the cartoon style | mix
+    "drawn_bg": "white",            # white | black — paper colour for drawn scenes and solid beats
     "captions": True,
     "caption_style": "neon",        # neon | clean
     # ---- training mode ----

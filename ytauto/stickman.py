@@ -16,16 +16,55 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 from agent import ai
 from agent.tools import ffmpeg_path, fonts_dir, media_duration, run
 
-from . import tts, visuals
+from . import scenes, tts, visuals
 
 FPS = 30
 POSES = ["neutral", "point_left", "point_right", "arms_up", "shrug", "thinking", "walking", "facepalm"]
 EXPRESSIONS = ["neutral", "happy", "shocked", "worried", "angry", "smug"]
 PLACEMENTS = ["center", "corner_bl", "corner_br", "corner_tl", "corner_tr", "edge_left", "edge_right"]
-MOTIONS = ["cut", "fly_left", "fly_right", "fly_top", "fly_bottom", "pop", "slide", "spin"]
+MOTIONS = ["hold", "cut", "fly_left", "fly_right", "fly_top", "fly_bottom", "pop", "slide", "spin"]
 ZOOMS = ["none", "push", "punch"]
-BGS = ["video", "photo", "black", "ui"]
+BGS = ["video", "photo", "scene", "black", "ui"]
 TIER_COLORS = {"S": (230, 57, 70), "A": (247, 140, 44), "B": (246, 205, 58), "C": (76, 187, 96)}
+
+_PACE = {"fast": (1.4, 2.2), "auto": (1.8, 4.0), "calm": (3.0, 5.5), "cinematic": (5.0, 8.0)}
+_SCENE_FOCAL = {"city": (0.3, 0.46), "road": (0.5, 0.78), "hill": (0.3, 0.55), "house": (0.5, 0.55),
+                "forest": (0.5, 0.5), "water": (0.45, 0.64), "space": (0.25, 0.3), "desert": (0.68, 0.72),
+                "snow": (0.5, 0.6), "storm": (0.5, 0.4), "plain": (0.5, 0.4)}
+
+
+def _pace_seconds(s, portrait):
+    pace = str(s.get("pace") or "auto").lower()
+    if str(s.get("stickman_backgrounds") or "") == "drawn" and pace == "auto":
+        pace = "calm"                     # drawn doodle scenes read best held a little longer
+    short_s, long_s = _PACE.get(pace, _PACE["auto"])
+    return short_s if portrait else long_s
+
+
+def _focal(beat, W, H):
+    """A point on screen the character should point at this beat (a graphic or the subject of a drawn scene)."""
+    g = beat.get("graphic")
+    if g:
+        if g.get("type") == "panel":
+            return (W * 0.5, H * 0.2)
+        if g.get("type") in ("ring", "tier", "card"):
+            return (W * 0.5, H * 0.42)
+    if beat.get("bg") == "scene":
+        fx, fy = _SCENE_FOCAL.get(beat.get("scene") or "", (0.4, 0.5))
+        return (W * fx, H * fy)
+    return None
+
+
+def _mark_holds(out, seed=0):
+    """Keep the character in the same spot across some beats (so he gestures in place instead of jumping around)."""
+    rnd = random.Random(seed + 3)
+    prev = None
+    for beats in out:
+        for b in beats:
+            if prev is not None and b.get("character") is not False and rnd.random() < 0.5:
+                b["placement"] = prev                 # stay put and keep gesturing
+            b["_hold"] = (prev is not None and b.get("placement") == prev)
+            prev = b.get("placement")
 
 
 # --------------------------------------------------------------------------------------------- drawing
@@ -65,20 +104,25 @@ _POSE_PTS = {   # shoulder (300,330), hip (300,560): arm ends L/R, leg ends L/R 
 }
 
 
-def draw_stickman(pose="neutral", expression="neutral", seed=0):
+def draw_stickman(pose="neutral", expression="neutral", seed=0, arms=None, legs=None, head_dy=0.0, mouth=0.0, blink=False):
+    """One frame of the character. arms/legs override the pose's limb endpoints (for animation);
+    head_dy bobs the head, mouth (0-1) opens the mouth as if talking, blink closes the eyes."""
     rnd = random.Random(f"{pose}-{expression}-{seed}")
     im = Image.new("RGBA", (600, 900), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     W = 26
-    al, ar, ll, lr = _POSE_PTS.get(pose, _POSE_PTS["neutral"])
-    sh, hip = (300, 330), (300, 560)
-    _marker(d, [(300, 268), hip], W, rnd)          # body
-    _marker(d, [sh, al], W, rnd)                    # arms
+    pal, par, pll, plr = _POSE_PTS.get(pose, _POSE_PTS["neutral"])
+    al, ar = (arms if arms else (pal, par))
+    ll, lr = (legs if legs else (pll, plr))
+    hb = head_dy
+    sh, hip = (300, 330 + hb * 0.4), (300, 560)
+    _marker(d, [(300, 268 + hb), hip], W, rnd)          # body
+    _marker(d, [sh, al], W, rnd)                         # arms
     _marker(d, [sh, ar], W, rnd)
-    _marker(d, [hip, ll], W, rnd)                   # legs
+    _marker(d, [hip, ll], W, rnd)                        # legs
     _marker(d, [hip, lr], W, rnd)
     # head: flat white circle, thick uneven outline
-    cx, cy, r = 300, 175, 98
+    cx, cy, r = 300, 175 + hb, 98
     pts = []
     for i in range(41):
         a = 2 * math.pi * i / 40
@@ -86,29 +130,43 @@ def draw_stickman(pose="neutral", expression="neutral", seed=0):
         pts.append((cx + rr * math.cos(a), cy + rr * math.sin(a)))
     d.polygon(pts, fill=(255, 255, 255, 255))
     d.line(pts, fill=(0, 0, 0, 255), width=15, joint="curve")
-    # face: 3-4 thick strokes
+    # face: 3-4 thick strokes (offset by the head bob)
     e = expression
-    if e == "shocked":
-        _marker(d, [(262, 140), (262, 168)], 16, rnd)
-        _marker(d, [(338, 140), (338, 168)], 16, rnd)
-        d.ellipse([280, 200, 320, 245], outline=(0, 0, 0, 255), width=12)
+    ey = cy - 175          # how much the face has shifted from the original layout
+    def P(x, y):
+        return (x, y + ey)
+    if blink:
+        _marker(d, [P(252, 158), P(278, 158)], 13, rnd)
+        _marker(d, [P(322, 158), P(348, 158)], 13, rnd)
+    elif e == "shocked":
+        _marker(d, [P(262, 140), P(262, 168)], 16, rnd)
+        _marker(d, [P(338, 140), P(338, 168)], 16, rnd)
     else:
-        _marker(d, [(265, 150), (265, 168)], 16, rnd)
-        _marker(d, [(335, 150), (335, 168)], 16, rnd)
-        if e == "happy":
-            d.arc([255, 175, 345, 240], 20, 160, fill=(0, 0, 0, 255), width=13)
-        elif e == "smug":
-            _marker(d, [(265, 222), (330, 210)], 13, rnd)
-        elif e == "worried":
-            d.arc([262, 212, 338, 262], 200, 340, fill=(0, 0, 0, 255), width=13)
-            _marker(d, [(245, 128), (282, 138)], 11, rnd)
-            _marker(d, [(355, 128), (318, 138)], 11, rnd)
-        elif e == "angry":
-            _marker(d, [(270, 225), (330, 225)], 13, rnd)
-            _marker(d, [(245, 128), (285, 145)], 12, rnd)
-            _marker(d, [(355, 128), (315, 145)], 12, rnd)
-        else:
-            _marker(d, [(270, 220), (330, 220)], 13, rnd)
+        _marker(d, [P(265, 150), P(265, 168)], 16, rnd)
+        _marker(d, [P(335, 150), P(335, 168)], 16, rnd)
+    # brows for some expressions
+    if e == "worried" and not blink:
+        _marker(d, [P(245, 128), P(282, 138)], 11, rnd)
+        _marker(d, [P(355, 128), P(318, 138)], 11, rnd)
+    elif e == "angry" and not blink:
+        _marker(d, [P(245, 128), P(285, 145)], 12, rnd)
+        _marker(d, [P(355, 128), P(315, 145)], 12, rnd)
+    # mouth: talking opens it; expression shapes it
+    mo = max(0.0, min(1.0, mouth))
+    if e == "shocked" or mo > 0.55:
+        h2 = 24 + mo * 26
+        d.ellipse([P(282, 206)[0], P(282, 206)[1], P(318, 206 + h2)[0], P(318, 206 + h2)[1]], outline=(0, 0, 0, 255), width=12)
+    elif e == "happy":
+        d.arc([P(255, 175)[0], P(255, 175)[1], P(345, 240)[0], P(345, 240)[1]], 20, 160, fill=(0, 0, 0, 255), width=13)
+    elif e == "smug":
+        _marker(d, [P(265, 222), P(330, 210)], 13, rnd)
+    elif e == "worried":
+        d.arc([P(262, 212)[0], P(262, 212)[1], P(338, 262)[0], P(338, 262)[1]], 200, 340, fill=(0, 0, 0, 255), width=13)
+    elif e == "angry":
+        _marker(d, [P(270, 225), P(330, 225)], 13, rnd)
+    else:
+        yln = 220 + mo * 10
+        _marker(d, [P(270, yln), P(330, yln)], 13, rnd)
     # thin white cutout edge, like a sticker cut out with scissors (keeps the black lines visible on black/dark photos)
     a = im.split()[3]
     edge = a.filter(ImageFilter.MaxFilter(11)).filter(ImageFilter.MaxFilter(5))
@@ -306,7 +364,21 @@ def plan(s, segs, log=None):
             b = beats[k] if k < len(beats) and isinstance(beats[k], dict) else {}
             fixed.append(_clean_beat(b, rnd, sg["text"]))
         out.append(fixed)
-    _limit_black(out, segs, _black_pct(s), rnd)
+    mode = str(s.get("stickman_backgrounds") or "stock").lower()
+    if mode == "drawn":
+        for i, beats in enumerate(out):
+            for b in beats:
+                if not b.get("graphic"):
+                    b["bg"] = "scene"
+                    b["scene"] = b.get("scene") or scenes.scene_for(b.get("query"), segs[i]["text"])
+    else:
+        _limit_black(out, segs, _black_pct(s), rnd)
+        if mode == "mix":
+            for i, beats in enumerate(out):
+                for b in beats:
+                    if b.get("bg") == "scene" and not b.get("scene"):
+                        b["scene"] = scenes.scene_for(b.get("query"), segs[i]["text"])
+    _mark_holds(out, len(segs))
     return out
 
 
@@ -352,10 +424,12 @@ def _clean_beat(b, rnd, text):
         "bg": pick("bg", BGS, "video" if rnd.random() < 0.6 else "photo"),
         "query": str(b.get("query") or _query_from(text, None))[:60],
         "query_given": bool(b.get("query")),
+        "scene": (str(b.get("scene")).strip().lower() if str(b.get("scene") or "").strip().lower() in scenes.SCENES else None),
         "pose": pick("pose", POSES, rnd.choice(POSES)),
         "expression": pick("expression", EXPRESSIONS, rnd.choice(EXPRESSIONS)),
+        "expression2": pick("expression2", EXPRESSIONS, None),
         "placement": pick("placement", PLACEMENTS, rnd.choice(PLACEMENTS)),
-        "motion": pick("motion", MOTIONS, rnd.choice(MOTIONS)),
+        "motion": pick("motion", MOTIONS, "hold" if rnd.random() < 0.7 else rnd.choice(["pop", "fly_left", "fly_right", "slide"])),
         "zoom": pick("zoom", ZOOMS, "push"),
         "character": b.get("character", True) is not False,
         "graphic": g,
@@ -367,10 +441,11 @@ def _ease(t):
     return 1 - (1 - max(0.0, min(1.0, t))) ** 3
 
 
-def _target(placement, W, H, seed):
-    """(center x, center y, figure height, rotation degrees) for a placement."""
-    rnd = random.Random(seed)
-    tilt = rnd.uniform(20, 40)
+def _target(placement, W, H, seed=0):
+    """(center x, center y, figure height, rotation degrees) for a placement.
+    Deterministic from the placement, so beats that keep the same placement line up exactly (no micro-jump)."""
+    rnd = random.Random(placement)
+    tilt = rnd.uniform(22, 36)
     return {
         "center": (W * 0.5, H * 0.66, H * 0.5, 0),
         "corner_bl": (W * 0.16, H * 0.86, H * 0.55, -tilt),
@@ -385,10 +460,12 @@ def _target(placement, W, H, seed):
 class _Bg:
     """Everything a beat can pull a background from, plus memory of recent good backgrounds (so a miss isn't black)."""
 
-    def __init__(self, photos, footage, portrait, genre):
+    def __init__(self, photos, footage, portrait, genre, drawn_bg="white", solid_color=(0, 0, 0)):
         self.photos, self.footage, self.portrait, self.genre = photos, footage, portrait, genre
+        self.drawn_bg = drawn_bg if drawn_bg in ("white", "black") else "white"
+        self.solid = solid_color
         self.recent = []         # recent good still backgrounds
-        self.counts = {"video": 0, "photo": 0, "ui": 0, "reused": 0, "gradient": 0, "black": 0}
+        self.counts = {"video": 0, "photo": 0, "scene": 0, "ui": 0, "reused": 0, "gradient": 0, "black": 0}
         self.credits_used = []
 
     def remember(self, img):
@@ -414,6 +491,111 @@ def _gradient(w, h, seed):
     return top.resize((w, h), Image.BICUBIC)
 
 
+# -------------------------------------------------------------------- animated character
+_SHOULDER = (300, 330)
+_REST = ((215, 500), (385, 500))
+_GESTURE_FOR = {"point_left": "point_left", "point_right": "point_right", "arms_up": "raise", "shrug": "shrug",
+                "thinking": "think", "facepalm": "facepalm", "walking": "explain", "neutral": "explain"}
+_GEST_ARMS = {                      # None = keep the resting arm
+    "point_left": ((70, 300), None), "point_right": (None, (530, 300)), "point_up": (None, (360, 120)),
+    "raise": ((170, 130), (430, 130)), "shrug": ((150, 270), (450, 270)),
+    "think": (None, (330, 250)), "facepalm": (None, (300, 190)), "explain": ((250, 440), (350, 440)),
+}
+_CHAR_FPS = 12                      # the character animates at 12 fps (limited-animation look, and cheap)
+
+
+def _lerp(a, b, k):
+    return (a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k)
+
+
+class _Actor:
+    """Animates the character in place: eases into a gesture, keeps a gentle idle sway, points at things,
+    blinks, moves its mouth as if talking, and can change expression partway through a long beat."""
+
+    def __init__(self, beat, fh, seed, pos, rot, size, point_target=None):
+        self.b, self.fh, self.seed = beat, fh, seed
+        self.cx, self.cy, self.rot = pos[0], pos[1], rot
+        self.W, self.H = size
+        self.gesture = _GEST_ARMS.get(_GESTURE_FOR.get(beat["pose"], "explain"), _GEST_ARMS["explain"])
+        self.expr = beat["expression"]
+        self.expr2 = beat.get("expression2") if beat.get("expression2") in EXPRESSIONS else None
+        self.rnd = random.Random(seed * 101 + 7)
+        self.ph = self.rnd.uniform(0, 6.28)
+        self.talk_seed = seed * 31 + 5
+        self.point = self._point_arms(point_target)
+        self._cache = {}
+
+    def _point_arms(self, target):
+        """If the gesture is a point and we have something to point at, aim the arm straight at it."""
+        if not target or not any(k in str(_GESTURE_FOR.get(self.b["pose"], "")) for k in ("point",)):
+            return None
+        dx, dy = target[0] - self.cx, target[1] - self.cy
+        n = math.hypot(dx, dy) or 1
+        dx, dy = dx / n, dy / n
+        end = (300 + dx * 265, 330 + dy * 265)
+        return ("left", end) if dx < 0 else ("right", end)
+
+    def _state(self, t, dur):
+        """Arm endpoints, head bob, mouth opening, blink and expression at time t."""
+        ease = 1.0 if self.b.get("_hold") else _ease(min(1.0, t / 0.35))   # settle in, unless he's continuing in place
+        gl, gr = self.gesture
+        gl = gl or _REST[0]
+        gr = gr or _REST[1]
+        if self.point:                                         # point straight at the thing
+            if self.point[0] == "left":
+                gl = self.point[1]
+            else:
+                gr = self.point[1]
+        sway = math.sin(t * 1.6 + self.ph)                     # slow idle sway
+        gl = (gl[0] + sway * 10, gl[1] + math.sin(t * 2.1) * 8)
+        gr = (gr[0] - sway * 10, gr[1] + math.cos(t * 1.9) * 8)
+        al = _lerp(_REST[0], gl, ease)
+        ar = _lerp(_REST[1], gr, ease)
+        head_dy = math.sin(t * 1.3 + self.ph) * 5              # breathing bob
+        # mouth: pseudo-random open/close so he looks like he's narrating
+        r = random.Random(self.talk_seed + int(t * _CHAR_FPS))
+        mouth = 0.0 if r.random() < 0.18 else r.uniform(0.2, 1.0)
+        blink = (int((t + self.ph) * _CHAR_FPS) % int(_CHAR_FPS * 2.6) < 1)   # a blink about every 2.6 s
+        expr = self.expr2 if (self.expr2 and t > dur * 0.55) else self.expr
+        return al, ar, head_dy, mouth, blink, expr
+
+    def _figure(self, t, dur):
+        fi = int(t * _CHAR_FPS)
+        if fi in self._cache:
+            return self._cache[fi]
+        al, ar, head_dy, mouth, blink, expr = self._state(fi / _CHAR_FPS, dur)
+        fig = draw_stickman(self.b["pose"], expr, self.seed % 3, arms=(al, ar), head_dy=head_dy, mouth=mouth, blink=blink)
+        scale = self.fh / fig.height
+        fig = fig.resize((max(1, int(fig.width * scale)), max(1, int(fig.height * scale))), Image.BILINEAR)
+        if self.rot:
+            fig = fig.rotate(self.rot, expand=True, resample=Image.BICUBIC)
+        self._cache = {fi: fig}
+        return fig
+
+    def draw(self, im, t, dur):
+        fig = self._figure(t, dur)
+        m = self.b.get("motion", "hold")
+        dx, dy, speed = 0.0, 0.0, None
+        if not self.b.get("_hold") and m.startswith("fly_") and t < 0.18:
+            k = 1 - _ease(t / 0.18)
+            off = {"fly_left": (-self.W, 0), "fly_right": (self.W, 0), "fly_top": (0, -self.H), "fly_bottom": (0, self.H)}[m]
+            dx, dy, speed = off[0] * k, off[1] * k, off
+        elif not self.b.get("_hold") and m == "pop" and t < 0.22:
+            pass        # handled by scale below
+        x = int(self.cx + dx - fig.width / 2)
+        y = int(self.cy + dy - fig.height / 2)
+        if speed:
+            d = ImageDraw.Draw(im)
+            ux = 1 if speed[0] < 0 else -1 if speed[0] > 0 else 0
+            uy = 1 if speed[1] < 0 else -1 if speed[1] > 0 else 0
+            for k in range(5):
+                ox = (k - 2) * fig.height * 0.12
+                sx = self.cx + dx - ux * fig.width * 0.5 + (ox if ux == 0 else 0)
+                sy = self.cy + dy - uy * fig.height * 0.5 + (ox if uy == 0 else 0)
+                d.line([(sx, sy), (sx - ux * self.W * 0.18, sy - uy * self.H * 0.12)], fill=(0, 0, 0), width=10)
+        im.paste(fig, (x, y), fig)
+
+
 class _Beat:
     def __init__(self, beat, dur, W, H, bgs, portrait, seed, keep=None, bgdir=None):
         """keep: what this beat used last time (re-edit of an unchanged beat). bgdir: where still backgrounds are saved."""
@@ -421,7 +603,7 @@ class _Beat:
         bg = beat["bg"]
         g = beat.get("graphic")
         BW, BH = int(W * 1.06), int(H * 1.06)
-        base, self.reader = None, None
+        base, self.reader, self.scene = None, None, None
         self.resolved = {"kind": "none"}
         if keep and keep.get("kind") == "video" and os.path.exists(keep.get("clip") or ""):
             from .footage import ClipReader
@@ -445,8 +627,21 @@ class _Beat:
                     bgs.remember(base)
             except Exception:
                 base = None
+        if base is None and keep and keep.get("kind") == "scene":
+            from .scenes import SceneClip
+            self.scene = SceneClip(keep.get("name") or "hill", BW, BH, bg=keep.get("bg") or bgs.drawn_bg, seed=seed)
+            base = self.scene.frame(0.0)
+            self.resolved = dict(keep)
+            bgs.counts["scene"] += 1
         if base is not None:
             pass
+        elif bg == "scene":
+            from .scenes import SceneClip, scene_for
+            name = beat.get("scene") or scene_for(beat.get("query"), "")
+            self.scene = SceneClip(name, BW, BH, bg=bgs.drawn_bg, seed=seed)
+            base = self.scene.frame(0.0)
+            self.resolved = {"kind": "scene", "name": name, "bg": bgs.drawn_bg}
+            bgs.counts["scene"] += 1
         elif g and g["type"] in ("ring", "tier"):
             base = None
         elif g and g["type"] == "card":
@@ -458,7 +653,7 @@ class _Beat:
                 self.resolved = {"kind": "card", "path": path, "key": bgs.photos.last_key, "credit": bgs.photos.last_credit}
                 bgs.credits_used += [bgs.photos.last_credit] if bgs.photos.last_credit else []
         elif bg == "black":
-            base = Image.new("RGB", (BW, BH), (0, 0, 0))
+            base = Image.new("RGB", (BW, BH), bgs.solid)
             bgs.counts["black"] += 1
         elif bg == "ui":
             base = ui_screen(BW, BH, seed)
@@ -507,17 +702,14 @@ class _Beat:
         self.overlay = g_panel(W, H, g.get("text", ""), g.get("color", "#FF3B30")) if g and g["type"] == "panel" else None
         self.tier = g_tier(W, H, g.get("rows")).convert("RGB") if g and g["type"] == "tier" else None
         self.ring = g if g and g["type"] == "ring" else None
-        self.fig = None
+        self.actor = None
         if beat["character"]:
-            fig = draw_stickman(beat["pose"], beat["expression"], seed % 3)
             cx, cy, fh, rot = _target(beat["placement"], W, H, seed)
             if beat["placement"] in ("corner_tl", "corner_tr") and g:
                 fh *= 0.8
             if g and (beat["placement"] == "center" or g["type"] == "tier"):     # keep graphics readable
                 cx, cy, fh, rot = W * 0.84, H * 0.9, H * 0.3, 25
-            scale = fh / fig.height
-            fig = fig.resize((max(1, int(fig.width * scale)), max(1, int(fig.height * scale))), Image.LANCZOS)
-            self.fig_base, self.target = fig, (cx, cy, rot)
+            self.actor = _Actor(beat, fh, seed, (cx, cy), rot, (W, H), point_target=_focal(beat, W, H))
 
     def frame(self, t):
         W, H, b = self.W, self.H, self.b
@@ -531,6 +723,8 @@ class _Beat:
                 nxt = self.reader.next()
                 if nxt is not None:
                     self.base = nxt
+            elif self.scene is not None and not self._first:
+                self.base = self.scene.frame(t)
             self._first = False
             bw, bh = self.base.size
             z = 1.0 + (0.05 * p if b["zoom"] in ("push", "punch") else 0)
@@ -548,44 +742,8 @@ class _Beat:
         return im
 
     def _draw_fig(self, im, t):
-        W, H = self.W, self.H
-        cx, cy, rot = self.target
-        m = self.b["motion"]
-        fig = self.fig_base
-        sc, dx, dy, drot = 1.0, 0.0, 0.0, 0.0
-        fly = 0.18
-        speed = None
-        if m.startswith("fly_") and t < fly:
-            k = 1 - _ease(t / fly)
-            off = {"fly_left": (-W, 0), "fly_right": (W, 0), "fly_top": (0, -H), "fly_bottom": (0, H)}[m]
-            dx, dy = off[0] * k, off[1] * k
-            speed = off
-        elif m == "pop":
-            if t < 0.12:
-                sc = 0.6 + 0.55 * (t / 0.12)
-            elif t < 0.26:
-                sc = 1.15 - 0.15 * ((t - 0.12) / 0.14)
-        elif m == "slide":
-            dx = W * 0.05 * (t / max(self.dur, 0.01)) * (1 if cx < W / 2 else -1)
-        elif m == "spin" and t < 0.2:
-            drot = 90 * (1 - _ease(t / 0.2))
-            sc = 0.7 + 0.3 * _ease(t / 0.2)
-        if sc != 1.0:
-            fig = fig.resize((max(1, int(fig.width * sc)), max(1, int(fig.height * sc))), Image.BILINEAR)
-        r = rot + drot
-        if r:
-            fig = fig.rotate(r, expand=True, resample=Image.BICUBIC)
-        x, y = int(cx + dx - fig.width / 2), int(cy + dy - fig.height / 2)
-        if speed:
-            d = ImageDraw.Draw(im)
-            ux, uy = (1 if speed[0] < 0 else -1 if speed[0] > 0 else 0), (1 if speed[1] < 0 else -1 if speed[1] > 0 else 0)
-            for k in range(5):
-                ox = (k - 2) * fig.height * 0.12
-                sx = cx + dx - ux * fig.width * 0.5 + (ox if ux == 0 else 0)
-                sy = cy + dy - uy * fig.height * 0.5 + (ox if uy == 0 else 0)
-                d.line([(sx, sy), (sx - ux * W * 0.18, sy - uy * H * 0.12)], fill=(0, 0, 0), width=10)
-        im.paste(fig, (x, y), fig)
-
+        if self.actor is not None:
+            self.actor.draw(im, t, self.dur)
 
 class _Override:
     """Settings with a few values replaced (YTSettings isn't a plain dict)."""
@@ -620,7 +778,8 @@ def build(s, segments, portrait, work, out_path, log=None):
         run([ffmpeg_path(), "-v", "error", "-y", "-i", mp3, "-af", "apad", "-t", f"{dur:.3f}", "-ar", "48000", "-ac", "2", wav])
         wavs.append(wav)
         words_all += [{"s": w["s"] + t0, "e": w["e"] + t0, "w": w["w"]} for w in words]
-        segs.append({"text": sg["text"], "dur": dur, "beats": max(1, int(round(dur / 1.5))), "chapter": sg.get("chapter", ""), "start": t0})
+        shot = _pace_seconds(s, portrait)
+        segs.append({"text": sg["text"], "dur": dur, "beats": max(1, int(round(dur / shot))), "chapter": sg.get("chapter", ""), "start": t0})
         t0 += dur
     with open(os.path.join(work, "segments.json"), "w", encoding="utf-8") as f:
         json.dump([{"start": round(x["start"], 2), "chapter": (x["chapter"] or "").strip()} for x in segs], f)
@@ -662,7 +821,10 @@ def render_visuals(s, ed, work, out_path, log=None, changed=None, avoid_keys=())
         except Exception as e:
             if log:
                 log("warn", f"Stock video search failed ({e}); using photos.")
-    bgs = _Bg(photos, footage, portrait, s.get("genre"))
+    _mode = str(s.get("stickman_backgrounds") or "stock").lower()
+    _drawn_bg = str(s.get("drawn_bg") or "white").lower()
+    _solid = (8, 10, 16) if (_mode == "stock" or _drawn_bg == "black") else (250, 250, 248)
+    bgs = _Bg(photos, footage, portrait, s.get("genre"), drawn_bg=_drawn_bg, solid_color=_solid)
     bgdir = os.path.join(work, "bgs")
     os.makedirs(bgdir, exist_ok=True)
 
