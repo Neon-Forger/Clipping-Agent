@@ -205,8 +205,17 @@
     <div class="card">
       <label>Visual style</label>
       <div class="row"><button onclick="cmd('yt style stickman')">Stickman</button><button onclick="cmd('yt style stock')">Stock footage</button></div>
+      <label>Pace (shot length)</label>
+      <div class="row"><button onclick="cmd('yt set pace fast')">Fast</button><button onclick="cmd('yt set pace calm')">Calm</button><button onclick="cmd('yt set pace cinematic')">Slow</button></div>
+      <label>Stickman backgrounds</label>
+      <div class="row"><button onclick="cmd('yt set stickman_backgrounds stock')">Stock</button><button onclick="cmd('yt set stickman_backgrounds drawn')">Drawn scenes</button><button onclick="cmd('yt set drawn_bg white')">White</button><button onclick="cmd('yt set drawn_bg black')">Black</button></div>
       <label>Visual direction (how videos LOOK: art style, backgrounds, camera, graphics)</label><textarea id="y_visual" style="min-height:140px"></textarea><br><br>
       <div class="row"><button onclick="cmd('yt visual '+$('y_visual').value)">Save</button><button onclick="cmd('yt visual clear')">Clear</button></div>
+    </div>
+    <div class="card">
+      <label>Narration voice</label>
+      <div class="row"><button onclick="cmd('yt set voice_clone.mode ai')">AI voice</button><button onclick="cmd('yt set voice_clone.mode cloned')">My cloned voice</button></div>
+      <p class="muted">Set up or record your cloned voice on the PC (YOUTUBE → CONTENT → Your voice). Cloning is used in your Shorts.</p>
     </div>
     <div class="card">
       <label>Script instructions (how the narration is written)</label><textarea id="y_prompt"></textarea><br><br>
