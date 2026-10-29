@@ -7,7 +7,12 @@ import shutil
 from agent import ai
 from agent.tools import ffmpeg_path, fonts_dir, media_duration, run
 
-from . import tts, visuals
+from . import visuals, voice
+
+# speech made clearer: de-rumble, a gentle presence lift, even levels, then target loudness
+_CLARITY = ("highpass=f=70,equalizer=f=3000:width_type=o:width=1.2:g=2.5,"
+            "acompressor=threshold=-18dB:ratio=3:attack=8:release=180,"
+            "loudnorm=I=-14:TP=-1.5:LRA=11")
 
 FPS = 30
 
@@ -202,7 +207,7 @@ def build_original(s, segments, portrait, work, out_path, log=None):
         if log:
             log("info", f"Voice + footage {i + 1}/{len(segments)}")
         mp3 = os.path.join(work, f"v{i:02d}.mp3")
-        words = tts.speak(seg["text"], s["voice"], s.get("voice_rate", "+0%"), mp3)
+        words = voice.narrate(s, seg["text"], mp3, portrait=portrait, log=log)
         dur = max(media_duration(mp3), 0.5) + 0.15
         q = seg.get("visual") or s["genre"]
         info = ctx.segment_clip(i, q, dur)
@@ -300,10 +305,10 @@ def _finish(s, parts, words, portrait, work, out_path):
     cmd = [ffmpeg_path(), "-v", "error", "-y", "-i", "joined.mp4"]
     if music:
         cmd += ["-stream_loop", "-1", "-i", music]
-        af = (f"[0:a]loudnorm=I=-14:TP=-1.5:LRA=11[v];[1:a]volume={s.get('music_volume', 0.12)},"
+        af = (f"[0:a]{_CLARITY}[v];[1:a]volume={s.get('music_volume', 0.12)},"
               f"afade=t=out:st={max(total - 3, 0):.2f}:d=3[m];[v][m]amix=inputs=2:duration=first:normalize=0[a]")
     else:
-        af = "[0:a]loudnorm=I=-14:TP=-1.5:LRA=11[a]"
+        af = f"[0:a]{_CLARITY}[a]"
     cmd += ["-filter_complex", f"[0:v]{vf}[v];{af}", "-map", "[v]", "-map", "[a]", "-t", f"{total:.3f}",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", os.path.abspath(out_path)]
@@ -324,7 +329,7 @@ def build_repurposed_long(s, src_video, plan, work, out_path, log=None):
     def narrated(text, still_at, idx):
         nonlocal t0
         mp3 = os.path.join(work, f"n{idx:02d}.mp3")
-        words = tts.speak(text, s["voice"], s.get("voice_rate", "+0%"), mp3)
+        words = voice.narrate(s, text, mp3, portrait=False, log=log)
         dur = max(media_duration(mp3), 0.5) + 0.2
         still = os.path.join(work, f"st{idx:02d}.png")
         run([ffmpeg_path(), "-v", "error", "-y", "-ss", f"{max(still_at, 0):.2f}", "-i", src_video, "-frames:v", "1", still])

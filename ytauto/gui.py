@@ -607,6 +607,20 @@ class YouTubeView:
         self.stick_caps = tk.BooleanVar(value=bool(s.get("stickman_captions")))
         ttk.Checkbutton(c, text="Word captions in the stickman style", variable=self.stick_caps,
                         style="Card.TCheckbutton").pack(anchor="w", pady=6)
+
+        c = self._card(inner, "PACING & CARTOON BACKGROUNDS",
+                       "Pace sets how long each shot is held — calmer, longer shots for long videos, with the cartoon "
+                       "character gesturing in place instead of jumping around. Backgrounds can be real stock footage, or "
+                       "hand-drawn doodle scenes of what's being talked about (city, road, hills, house, forest, water, space…) "
+                       "in the character's own marker style, on a white or black page.")
+        self.pace_var = self._combo(c, "Pace (shot length)",
+                                    ["auto", "fast", "calm", "cinematic"], s.get("pace") or "auto")
+        self.bg_var = self._combo(c, "Stickman backgrounds",
+                                  ["stock", "drawn", "mix"], s.get("stickman_backgrounds") or "stock")
+        self.drawnbg_var = self._combo(c, "Drawn-scene page colour", ["white", "black"], s.get("drawn_bg") or "white")
+
+        self._voice_card(inner, s)
+
         c = self._card(inner, "DAILY PLAN", "Runs while the PC is on and NeonClip is open. Times are 24h, your local time.")
         for key, label in (("daily.long_videos", "Long videos per day"), ("daily.shorts", "Shorts per day"),
                            ("daily.make_at", "Start making at (HH:MM)"), ("daily.upload_times", "Upload times (comma separated, e.g. 12:00, 15:00, 18:00)"),
@@ -629,6 +643,90 @@ class YouTubeView:
         t.pack(fill="x")
         t.insert("1.0", value)
         return t
+
+    def _combo(self, parent, label, values, value, width=18):
+        r = ttk.Frame(parent, style="Card.TFrame")
+        r.pack(fill="x", pady=3)
+        ttk.Label(r, text=label, style="Card.TLabel", width=58).pack(side="left")
+        v = tk.StringVar(value=value)
+        ttk.Combobox(r, textvariable=v, values=values, state="readonly", width=width).pack(side="left")
+        return v
+
+    # AI voices that don't need a network lookup to list (the user can also type any Edge voice name)
+    AI_VOICES = ["en-US-AndrewNeural", "en-US-AriaNeural", "en-US-GuyNeural", "en-US-JennyNeural",
+                 "en-US-ChristopherNeural", "en-US-EmmaNeural", "en-US-BrianNeural", "en-US-MichelleNeural",
+                 "en-US-RogerNeural", "en-GB-RyanNeural", "en-GB-SoniaNeural", "en-AU-NatashaNeural"]
+
+    def _voice_card(self, inner, s):
+        v = s.get("voice_clone") or {}
+        c = self._card(inner, "YOUR VOICE (NARRATION)",
+                       "Use a smooth AI voice, or clone your own voice and have it narrate your Shorts. Cloning is a "
+                       "one-time ~2 GB setup on this PC and works best with 30–60 seconds of clear speech.")
+        r = ttk.Frame(c, style="Card.TFrame")
+        r.pack(fill="x", pady=3)
+        ttk.Label(r, text="Voice", style="Card.TLabel", width=58).pack(side="left")
+        self.vmode_var = tk.StringVar(value="My cloned voice" if v.get("mode") == "cloned" else "AI voice")
+        ttk.Combobox(r, textvariable=self.vmode_var, values=["AI voice", "My cloned voice"], state="readonly", width=18).pack(side="left")
+        r2 = ttk.Frame(c, style="Card.TFrame")
+        r2.pack(fill="x", pady=3)
+        ttk.Label(r2, text="AI voice (used unless cloning is on)", style="Card.TLabel", width=58).pack(side="left")
+        self.aivoice_var = tk.StringVar(value=s.get("voice") or self.AI_VOICES[0])
+        ttk.Combobox(r2, textvariable=self.aivoice_var, values=self.AI_VOICES, width=26).pack(side="left")
+        self.vusein_var = self._combo(c, "Use my cloned voice in", ["shorts", "all"], v.get("use_in") or "shorts")
+        row = ttk.Frame(c, style="Card.TFrame")
+        row.pack(fill="x", pady=(8, 2))
+        ttk.Button(row, text="Import a voice sample…", command=self._import_voice).pack(side="left")
+        ttk.Button(row, text="Set up / update voice cloning", style="Accent.TButton", command=self._setup_cloning).pack(side="left", padx=8)
+        self.voice_status = ttk.Label(c, text=self._voice_status_text(), style="CardMuted.TLabel", wraplength=1000, justify="left")
+        self.voice_status.pack(anchor="w", pady=(4, 0))
+
+    def _voice_status_text(self):
+        from . import voice_engine
+        s = self.yt.s
+        v = s.get("voice_clone") or {}
+        sample = (v.get("sample") or "")
+        parts = [voice_engine.status_text(s)]
+        parts.append(("Sample: " + os.path.basename(sample)) if sample and os.path.exists(sample) else "No voice sample yet.")
+        return "  ·  ".join(parts)
+
+    def _import_voice(self):
+        from agent.config import data_dir
+        path = filedialog.askopenfilename(title="Pick a recording of your voice (30–60s, clear speech)",
+                                          filetypes=[("Audio", "*.wav *.mp3 *.m4a *.ogg *.flac"), ("All files", "*.*")])
+        if not path:
+            return
+        vdir = os.path.join(data_dir(), "voice")
+        os.makedirs(vdir, exist_ok=True)
+        ext = os.path.splitext(path)[1].lower() or ".wav"
+        dest = os.path.join(vdir, "sample" + ext)
+        try:
+            import shutil
+            shutil.copyfile(path, dest)
+        except Exception as e:
+            messagebox.showerror("NeonClip", f"Couldn't read that file: {e}")
+            return
+        self.yt.s.set("voice_clone.sample", dest)
+        self.voice_status.config(text=self._voice_status_text())
+        messagebox.showinfo("NeonClip", "Voice sample saved. Set “Voice” to “My cloned voice” and save to use it.")
+
+    def _setup_cloning(self):
+        from . import voice_engine
+        if not messagebox.askyesno("Voice cloning",
+                                   "This downloads the voice engine (~2 GB) and sets it up on this PC. It can take several "
+                                   "minutes and needs internet. Do it now?"):
+            return
+        self.voice_status.config(text="Setting up voice cloning… this can take several minutes.")
+
+        def prog(msg):
+            self.root.after(0, lambda: self.voice_status.config(text=msg))
+
+        def go():
+            ok, msg = voice_engine.ensure(self.yt.s, self.yt.log, progress=prog)
+            def done():
+                self.voice_status.config(text=self._voice_status_text())
+                (messagebox.showinfo if ok else messagebox.showwarning)("NeonClip", msg)
+            self.root.after(0, done)
+        threading.Thread(target=go, daemon=True).start()
 
     def _row(self, parent, key, label, secret=False):
         r = ttk.Frame(parent, style="Card.TFrame")
@@ -673,6 +771,17 @@ class YouTubeView:
         s.set("visual_style", self.style_var.get() or "stock")
         s.set("visual_instructions", self.visual_text.get("1.0", "end").strip(), raw=True)
         s.set("stickman_captions", bool(self.stick_caps.get()))
+        s.set("pace", self.pace_var.get() or "auto")
+        s.set("stickman_backgrounds", self.bg_var.get() or "stock")
+        s.set("drawn_bg", self.drawnbg_var.get() or "white")
+        s.set("voice", (self.aivoice_var.get() or "en-US-AndrewNeural").strip())
+        s.set("voice_clone.mode", "cloned" if self.vmode_var.get() == "My cloned voice" else "ai")
+        s.set("voice_clone.use_in", self.vusein_var.get() or "shorts")
+        if self.vmode_var.get() == "My cloned voice":
+            from . import voice_engine
+            if not voice_engine.sample_path(s):
+                messagebox.showwarning("NeonClip", "Cloned voice is selected but there's no voice sample yet — import one, "
+                                                   "or it'll use the AI voice until you do.")
         self.yt.wake.set()
         messagebox.showinfo("NeonClip", "Saved.")
 

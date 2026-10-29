@@ -39,7 +39,12 @@ DEFAULTS = {
     "find_creative_commons": True,  # search YouTube for Creative Commons videos in your genre to repurpose
     # ---- voice & visuals ----
     "voice": "en-US-AndrewNeural",  # Microsoft Edge neural voices (free)
-    "voice_rate": "+5%",
+    "voice_clone": {                # use your OWN voice (optional; one-time ~2 GB engine download)
+        "mode": "ai",               # ai = normal AI voice | cloned = your cloned voice
+        "use_in": "shorts",         # shorts | all — where the cloned voice is used
+        "sample": "",               # a recording of your voice (wav/mp3) to clone from
+    },
+    "voice_rate": "+0%",
     "pexels_api_key": "",           # free key from pexels.com/api, used for stock footage
     "pixabay_api_key": "",          # free key from pixabay.com/api/docs (stock photos + stock video)
     "unsplash_access_key": "",      # free "Access Key" from unsplash.com/developers (photos)

@@ -16,11 +16,12 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 from agent import ai
 from agent.tools import ffmpeg_path, fonts_dir, media_duration, run
 
-from . import scenes, tts, visuals
+from . import scenes, visuals, voice
 
 FPS = 30
-POSES = ["neutral", "point_left", "point_right", "arms_up", "shrug", "thinking", "walking", "facepalm"]
-EXPRESSIONS = ["neutral", "happy", "shocked", "worried", "angry", "smug"]
+POSES = ["neutral", "point_left", "point_right", "point_up", "point_down", "present_left", "present_right",
+         "arms_up", "shrug", "thinking", "walking", "facepalm", "wave", "hands_hips", "cheer", "count"]
+EXPRESSIONS = ["neutral", "happy", "shocked", "worried", "angry", "smug", "sad", "confused", "excited", "wink", "laughing"]
 PLACEMENTS = ["center", "corner_bl", "corner_br", "corner_tl", "corner_tr", "edge_left", "edge_right"]
 MOTIONS = ["hold", "cut", "fly_left", "fly_right", "fly_top", "fly_bottom", "pop", "slide", "spin"]
 ZOOMS = ["none", "push", "punch"]
@@ -101,6 +102,14 @@ _POSE_PTS = {   # shoulder (300,330), hip (300,560): arm ends L/R, leg ends L/R 
     "thinking": ((215, 500), (330, 245), (240, 840), (360, 840)),
     "walking": ((210, 470), (400, 440), (200, 820), (420, 800)),
     "facepalm": ((215, 500), (300, 185), (240, 840), (360, 840)),
+    "point_up": ((215, 500), (360, 110), (235, 840), (365, 840)),
+    "point_down": ((215, 500), (430, 640), (235, 840), (365, 840)),
+    "present_left": ((110, 420), (385, 500), (235, 840), (365, 840)),
+    "present_right": ((215, 500), (490, 420), (235, 840), (365, 840)),
+    "wave": ((215, 500), (470, 150), (235, 840), (365, 840)),
+    "hands_hips": ((190, 430), (410, 430), (235, 840), (365, 840)),
+    "cheer": ((150, 120), (450, 120), (225, 840), (375, 840)),
+    "count": ((230, 470), (360, 230), (235, 840), (365, 840)),
 }
 
 
@@ -141,29 +150,47 @@ def draw_stickman(pose="neutral", expression="neutral", seed=0, arms=None, legs=
     elif e == "shocked":
         _marker(d, [P(262, 140), P(262, 168)], 16, rnd)
         _marker(d, [P(338, 140), P(338, 168)], 16, rnd)
+    elif e == "excited":                                    # wide bright round eyes
+        d.ellipse([P(256, 146)[0], P(256, 146)[1], P(280, 170)[0], P(280, 170)[1]], outline=(0, 0, 0, 255), width=10)
+        d.ellipse([P(320, 146)[0], P(320, 146)[1], P(344, 170)[0], P(344, 170)[1]], outline=(0, 0, 0, 255), width=10)
+    elif e == "laughing":                                   # happy ^ ^ eyes
+        d.arc([P(250, 150)[0], P(250, 150)[1], P(290, 180)[0], P(290, 180)[1]], 180, 360, fill=(0, 0, 0, 255), width=12)
+        d.arc([P(310, 150)[0], P(310, 150)[1], P(350, 180)[0], P(350, 180)[1]], 180, 360, fill=(0, 0, 0, 255), width=12)
+    elif e == "wink":
+        _marker(d, [P(252, 160), P(278, 160)], 13, rnd)     # left eye closed
+        _marker(d, [P(335, 150), P(335, 168)], 16, rnd)
     else:
         _marker(d, [P(265, 150), P(265, 168)], 16, rnd)
         _marker(d, [P(335, 150), P(335, 168)], 16, rnd)
     # brows for some expressions
-    if e == "worried" and not blink:
-        _marker(d, [P(245, 128), P(282, 138)], 11, rnd)
-        _marker(d, [P(355, 128), P(318, 138)], 11, rnd)
-    elif e == "angry" and not blink:
-        _marker(d, [P(245, 128), P(285, 145)], 12, rnd)
-        _marker(d, [P(355, 128), P(315, 145)], 12, rnd)
+    if not blink:
+        if e in ("worried", "sad"):                             # inner ends raised = worried/sad
+            _marker(d, [P(245, 144), P(284, 126)], 11, rnd)
+            _marker(d, [P(355, 144), P(316, 126)], 11, rnd)
+        elif e == "angry":
+            _marker(d, [P(245, 128), P(285, 145)], 12, rnd)
+            _marker(d, [P(355, 128), P(315, 145)], 12, rnd)
+        elif e == "confused":
+            _marker(d, [P(245, 140), P(285, 128)], 11, rnd)     # one up, one down
+            _marker(d, [P(320, 140), P(358, 142)], 11, rnd)
     # mouth: talking opens it; expression shapes it
     mo = max(0.0, min(1.0, mouth))
-    if e == "shocked" or mo > 0.55:
+    if e == "laughing":
+        h2 = 34 + mo * 20
+        d.ellipse([P(276, 204)[0], P(276, 204)[1], P(324, 204 + h2)[0], P(324, 204 + h2)[1]], fill=(0, 0, 0, 255))
+    elif e in ("shocked", "excited") or mo > 0.55:
         h2 = 24 + mo * 26
         d.ellipse([P(282, 206)[0], P(282, 206)[1], P(318, 206 + h2)[0], P(318, 206 + h2)[1]], outline=(0, 0, 0, 255), width=12)
     elif e == "happy":
         d.arc([P(255, 175)[0], P(255, 175)[1], P(345, 240)[0], P(345, 240)[1]], 20, 160, fill=(0, 0, 0, 255), width=13)
-    elif e == "smug":
+    elif e in ("smug", "wink"):
         _marker(d, [P(265, 222), P(330, 210)], 13, rnd)
-    elif e == "worried":
+    elif e in ("worried", "sad"):
         d.arc([P(262, 212)[0], P(262, 212)[1], P(338, 262)[0], P(338, 262)[1]], 200, 340, fill=(0, 0, 0, 255), width=13)
     elif e == "angry":
         _marker(d, [P(270, 225), P(330, 225)], 13, rnd)
+    elif e == "confused":
+        _marker(d, [P(272, 222), P(298, 212), P(318, 224), P(332, 214)], 11, rnd)     # squiggly unsure mouth
     else:
         yln = 220 + mo * 10
         _marker(d, [P(270, yln), P(330, yln)], 13, rnd)
@@ -308,9 +335,12 @@ VISUAL DIRECTION FROM THE OWNER (follow it over any default):
 What the editor can do (use ONLY these values):
 - bg: "video" (moving stock footage or animation; give "query": 2-4 plain visual words to search, e.g. "foggy forest night",
   "old film reel", "police car lights", never a real person's name), "photo" (a real stock photo; same kind of "query"),
-  "black" (plain black, rarely), or "ui" (a flat generic app/website screen)
-- pose: {poses}
-- expression: {expressions}
+  "black" (plain black, rarely), "ui" (a flat generic app/website screen), or
+  "scene" (a hand-drawn doodle of the PLACE/OBJECT being described, in the character's own marker style; also give
+  "scene": one of city, road, hill, house, forest, water, space, desert, snow, storm — pick the closest to the subject)
+- pose: {poses}   (the character now ANIMATES in place: his arms move, he blinks and talks. point_*/present_* make him
+  point straight at the background subject or the on-screen graphic, so choose those when he's calling something out)
+- expression: {expressions}   (you may also add "expression2": a second expression he changes to partway through the beat)
 - placement: {placements}   (corner_*/edge_* = tilted and partly cropped off the frame like a webcam overlay; center = full body in the lower middle third)
 - motion: {motions}   (fly_* = fast fly-in from that edge with speed lines; pop = scale-pop bounce; slide = slow drift; cut = static)
 - zoom: {zooms}   (push = slow 5% push-in on the photo; punch = sudden 110-130% punch-in, use on reveals)
@@ -322,8 +352,11 @@ What the editor can do (use ONLY these values):
   {{"type": "card", "query": "stock photo search words"}}   a photo inside a white rounded card on black
 Text only appears inside graphics. Only add graphics with text if the direction allows text.
 
-The narration is split into segments; each needs exactly the given number of beats (hard cuts every 1-2 s).
-Vary poses, placements and motions so consecutive beats never look the same. Backgrounds must match what is being said.
+The narration is split into segments; each needs exactly the given number of beats. Hold each beat — the character keeps
+moving on his own (arm gestures, pointing, blinking, talking, changing expression), so you do NOT need a hard cut to keep it alive.
+Prefer keeping the same placement across neighbouring beats and let him gesture in place; change placement only now and then.
+Vary poses and expressions so he feels alive, and make them fit the words (point_* / present_* when calling something out,
+shocked/excited on a reveal, thinking on a question, sad/worried on something grim). Backgrounds must match what is being said.
 BACKGROUNDS: use "video" for most beats (moving footage keeps viewers watching), "photo" for the rest. Use "black" on at most
 {black_pct}% of beats (only for a deliberate dramatic pause), even if the direction mentions black. Queries must be concrete things
 a camera could film (places, objects, weather, crowds, vehicles), not abstract ideas: "abandoned hospital hallway", not "mystery".
@@ -331,7 +364,7 @@ a camera could film (places, objects, weather, crowds, vehicles), not abstract i
 SEGMENTS:
 {segments}
 
-Return JSON: {{"segments": [{{"beats": [{{"bg": "...", "query": "...", "pose": "...", "expression": "...", "placement": "...", "motion": "...", "zoom": "...", "character": true, "graphic": null}}]}}]}}"""
+Return JSON: {{"segments": [{{"beats": [{{"bg": "...", "query": "...", "scene": "...", "pose": "...", "expression": "...", "expression2": "...", "placement": "...", "motion": "...", "zoom": "...", "character": true, "graphic": null}}]}}]}}"""
 
 
 def plan(s, segs, log=None):
@@ -494,13 +527,18 @@ def _gradient(w, h, seed):
 # -------------------------------------------------------------------- animated character
 _SHOULDER = (300, 330)
 _REST = ((215, 500), (385, 500))
-_GESTURE_FOR = {"point_left": "point_left", "point_right": "point_right", "arms_up": "raise", "shrug": "shrug",
-                "thinking": "think", "facepalm": "facepalm", "walking": "explain", "neutral": "explain"}
+_GESTURE_FOR = {"point_left": "point_left", "point_right": "point_right", "point_up": "point_up", "point_down": "point_down",
+                "present_left": "present_left", "present_right": "present_right", "arms_up": "raise", "cheer": "cheer",
+                "shrug": "shrug", "thinking": "think", "facepalm": "facepalm", "wave": "wave", "hands_hips": "hands_hips",
+                "count": "count", "walking": "explain", "neutral": "explain"}
 _GEST_ARMS = {                      # None = keep the resting arm
-    "point_left": ((70, 300), None), "point_right": (None, (530, 300)), "point_up": (None, (360, 120)),
-    "raise": ((170, 130), (430, 130)), "shrug": ((150, 270), (450, 270)),
-    "think": (None, (330, 250)), "facepalm": (None, (300, 190)), "explain": ((250, 440), (350, 440)),
+    "point_left": ((70, 300), None), "point_right": (None, (530, 300)), "point_up": (None, (360, 110)),
+    "point_down": (None, (430, 640)), "present_left": ((110, 420), None), "present_right": (None, (490, 420)),
+    "raise": ((170, 130), (430, 130)), "cheer": ((150, 120), (450, 120)), "shrug": ((150, 270), (450, 270)),
+    "think": (None, (330, 250)), "facepalm": (None, (300, 190)), "wave": (None, (470, 150)),
+    "hands_hips": ((190, 430), (410, 430)), "count": (None, (360, 230)), "explain": ((250, 440), (350, 440)),
 }
+_POINTERS = ("point_left", "point_right", "point_up", "point_down", "present_left", "present_right")
 _CHAR_FPS = 12                      # the character animates at 12 fps (limited-animation look, and cheap)
 
 
@@ -516,7 +554,8 @@ class _Actor:
         self.b, self.fh, self.seed = beat, fh, seed
         self.cx, self.cy, self.rot = pos[0], pos[1], rot
         self.W, self.H = size
-        self.gesture = _GEST_ARMS.get(_GESTURE_FOR.get(beat["pose"], "explain"), _GEST_ARMS["explain"])
+        self.gname = _GESTURE_FOR.get(beat["pose"], "explain")
+        self.gesture = _GEST_ARMS.get(self.gname, _GEST_ARMS["explain"])
         self.expr = beat["expression"]
         self.expr2 = beat.get("expression2") if beat.get("expression2") in EXPRESSIONS else None
         self.rnd = random.Random(seed * 101 + 7)
@@ -526,8 +565,8 @@ class _Actor:
         self._cache = {}
 
     def _point_arms(self, target):
-        """If the gesture is a point and we have something to point at, aim the arm straight at it."""
-        if not target or not any(k in str(_GESTURE_FOR.get(self.b["pose"], "")) for k in ("point",)):
+        """If the gesture is a point/present and we have something to point at, aim the arm straight at it."""
+        if not target or _GESTURE_FOR.get(self.b["pose"], "") not in _POINTERS:
             return None
         dx, dy = target[0] - self.cx, target[1] - self.cy
         n = math.hypot(dx, dy) or 1
@@ -549,9 +588,29 @@ class _Actor:
         sway = math.sin(t * 1.6 + self.ph)                     # slow idle sway
         gl = (gl[0] + sway * 10, gl[1] + math.sin(t * 2.1) * 8)
         gr = (gr[0] - sway * 10, gr[1] + math.cos(t * 1.9) * 8)
+        g = self.gname                                          # gesture-specific liveliness
+        if g == "wave":                                        # waving hand side to side
+            gr = (gr[0] + math.sin(t * 7) * 45, gr[1] - abs(math.sin(t * 7)) * 20)
+        elif g == "cheer":                                     # pumping both arms up and down
+            pump = abs(math.sin(t * 5)) * 60
+            gl = (gl[0], gl[1] - pump); gr = (gr[0], gr[1] - pump)
+        elif g == "count":                                     # little bobbing hand, like counting points
+            gr = (gr[0] + math.sin(t * 4) * 12, gr[1] + math.sin(t * 8) * 18)
+        elif g == "think":                                     # finger taps the chin
+            gr = (gr[0], gr[1] + math.sin(t * 6) * 10)
+        elif g == "explain":                                   # hands open and close as if talking
+            o = math.sin(t * 3) * 35
+            gl = (gl[0] - o, gl[1]); gr = (gr[0] + o, gr[1])
+        elif g in ("present_left", "present_right"):           # gentle "ta-da" bob toward the thing
+            d = math.sin(t * 3) * 14
+            if g.endswith("left"):
+                gl = (gl[0] - d, gl[1] + d)
+            else:
+                gr = (gr[0] + d, gr[1] + d)
         al = _lerp(_REST[0], gl, ease)
         ar = _lerp(_REST[1], gr, ease)
-        head_dy = math.sin(t * 1.3 + self.ph) * 5              # breathing bob
+        bounce = abs(math.sin(t * 2.4)) * 4 if g in ("cheer", "wave") else 0   # excited little hop
+        head_dy = math.sin(t * 1.3 + self.ph) * 5 - bounce     # breathing bob
         # mouth: pseudo-random open/close so he looks like he's narrating
         r = random.Random(self.talk_seed + int(t * _CHAR_FPS))
         mouth = 0.0 if r.random() < 0.18 else r.uniform(0.2, 1.0)
@@ -772,7 +831,7 @@ def build(s, segments, portrait, work, out_path, log=None):
         if log:
             log("info", f"Voice {i + 1}/{len(segments)}")
         mp3 = os.path.join(work, f"v{i:02d}.mp3")
-        words = tts.speak(sg["text"], s["voice"], s.get("voice_rate", "+0%"), mp3)
+        words = voice.narrate(s, sg["text"], mp3, portrait=portrait, log=log)
         dur = max(media_duration(mp3), 0.5) + 0.15
         wav = os.path.join(work, f"v{i:02d}.wav")
         run([ffmpeg_path(), "-v", "error", "-y", "-i", mp3, "-af", "apad", "-t", f"{dur:.3f}", "-ar", "48000", "-ac", "2", wav])
@@ -869,7 +928,7 @@ def render_visuals(s, ed, work, out_path, log=None, changed=None, avoid_keys=())
         raise
     if log:
         c = bgs.counts
-        log("info", f"Backgrounds: {c['video']} moving, {c['photo']} photo, {c['ui']} screen, {c['reused']} reused, "
+        log("info", f"Backgrounds: {c['video']} moving, {c['scene']} drawn, {c['photo']} photo, {c['ui']} screen, {c['reused']} reused, "
                     f"{c['gradient']} color, {c['black']} black. Photos: {photos.summary()}"
                     + (f". Video: {footage.summary()}" if footage else ""))
         if c["gradient"] + c["reused"] > max(3, (c["video"] + c["photo"]) // 2):
@@ -912,9 +971,10 @@ footage, find the beats that use it; if they ask for something across the whole 
 Leave every other beat out of your answer so it stays exactly as it is.
 
 For each beat you change you may set any of:
-- bg: "video" (moving stock footage) / "photo" / "ui" / "black"; query: 2-4 concrete visual search words (things a camera can film)
+- bg: "video" (moving stock footage) / "photo" / "scene" (hand-drawn doodle) / "ui" / "black"; query: 2-4 concrete visual words
+- scene: city / road / hill / house / forest / water / space / desert / snow / storm (only when bg is "scene")
 - new_footage: true  (same idea but different footage than before; use when the owner says a clip is bad/wrong/repetitive)
-- pose: {poses}; expression: {expressions}; placement: {placements}; motion: {motions}; zoom: {zooms}; character: true/false
+- pose: {poses}; expression: {expressions}; expression2 (optional); placement: {placements}; motion: {motions}; zoom: {zooms}; character: true/false
 - graphic: null, or {{"type": "panel", "text": "...", "color": "#RRGGBB"}} / {{"type": "ring", "value": 0-100, "label": "..."}} /
   {{"type": "tier", "rows": {{"S": [...], "A": [...], "B": [...], "C": [...]}}}} / {{"type": "card", "query": "..."}}
 
@@ -959,7 +1019,7 @@ def reedit(s, work, out_path, instructions, log=None):
             continue
         si, bi = flat[num]
         b = dict(ed["beats"][si][bi])
-        for key in ("bg", "query", "pose", "expression", "placement", "motion", "zoom", "character", "graphic"):
+        for key in ("bg", "query", "scene", "pose", "expression", "expression2", "placement", "motion", "zoom", "character", "graphic"):
             if key in ch:
                 b[key] = ch[key]
         fixed = _clean_beat(b, rnd, ed["segs"][si]["text"])
