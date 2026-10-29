@@ -85,7 +85,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: v2.0.${{ github.run_number }}
-          name: NeonClip v2.0.${{ github.run_number }}
+          name: NeonClip V2 (v2.0.${{ github.run_number }})
           make_latest: true
           body: |
             **NeonClip-Windows.zip**: the PC app (Clipping + YouTube sections). Unzip anywhere, open `NeonClip.exe`.

@@ -56,7 +56,7 @@ class YouTubeView:
             except Exception as e:
                 msg = str(e)
                 self.yt.log("error", msg)
-                self.root.after(0, lambda: messagebox.showerror("NeonClip", msg))
+                self.root.after(0, lambda: messagebox.showerror("NeonClip V2", msg))
         threading.Thread(target=go, daemon=True).start()
 
     def _cmd(self, text):
@@ -546,14 +546,14 @@ class YouTubeView:
     def _apply_brand(self):
         ch = self.yt.s["channel"]
         if not ch.get("channel_id"):
-            messagebox.showwarning("NeonClip", "Pick your channel first (step 2).")
+            messagebox.showwarning("NeonClip V2", "Pick your channel first (step 2).")
             return
         if not ch.get("avatar_file"):
-            messagebox.showwarning("NeonClip", "Make the profile picture + banner first.")
+            messagebox.showwarning("NeonClip V2", "Make the profile picture + banner first.")
             return
 
         def done(ok):
-            messagebox.showinfo("NeonClip", "Done ✅ (YouTube can take a few minutes to show it)." if ok else
+            messagebox.showinfo("NeonClip V2", "Done ✅ (YouTube can take a few minutes to show it)." if ok else
                                 "Couldn't finish automatically. Use \"Open branding page\" and upload the files from:\n" + os.path.dirname(ch["avatar_file"]))
         self._bg(lambda: self._locked(studio.set_branding, self.yt.s, ch["avatar_file"], ch["banner_file"], self.yt.log), done=done)
 
@@ -569,7 +569,7 @@ class YouTubeView:
                 missing.append("add an AI key (SETTINGS tab)")
             if missing:
                 self.on_var.set(False)
-                messagebox.showwarning("NeonClip", "Before turning it on:\n• " + "\n• ".join(missing))
+                messagebox.showwarning("NeonClip V2", "Before turning it on:\n• " + "\n• ".join(missing))
                 return
             s.set("setup_done", True)
             s.set("enabled", True)
@@ -617,7 +617,33 @@ class YouTubeView:
                                     ["auto", "fast", "calm", "cinematic"], s.get("pace") or "auto")
         self.bg_var = self._combo(c, "Stickman backgrounds",
                                   ["stock", "drawn", "mix"], s.get("stickman_backgrounds") or "stock")
-        self.drawnbg_var = self._combo(c, "Drawn-scene page colour", ["white", "black"], s.get("drawn_bg") or "white")
+        self.drawnbg_var = self._combo(c, "Drawn-scene / prop page colour", ["white", "black"], s.get("drawn_bg") or "white")
+        self.props_var = self._combo(c, "Props: he points at a drawing of what he's talking about",
+                                     ["off", "some", "lots"], s.get("props") or "some")
+        self.propsai_var = tk.BooleanVar(value=bool(s.get("props_ai", True)))
+        ttk.Checkbutton(c, text="If none of the 200+ built-in doodles fits, draw one with AI (uses your Gemini key)",
+                        variable=self.propsai_var, style="Card.TCheckbutton").pack(anchor="w", pady=(4, 2))
+        pr = ttk.Frame(c, style="Card.TFrame")
+        pr.pack(fill="x", pady=(6, 2))
+        ttk.Button(pr, text="See all props", command=self._prop_gallery).pack(side="left")
+        ttk.Button(pr, text="Open my props folder", command=self._open_props).pack(side="left", padx=8)
+        ttk.Label(c, text="Your own pictures go in that folder, named after the thing (e.g. \u201cclaude ai.png\u201d, \u201cmy logo.png\u201d). "
+                          "They're used whenever that thing comes up \u2014 use it for logos you have the rights to show.",
+                  style="CardMuted.TLabel", wraplength=980, justify="left").pack(anchor="w", pady=(2, 0))
+
+        c = self._card(inner, "LIKE & SUBSCRIBE ENDING",
+                       "At the end of every video the character says a like-and-subscribe line and points at a drawn SUBSCRIBE "
+                       "button; a cursor clicks it (pop), the bell rings (ding), and an arrow draws down to where YouTube's real "
+                       "subscribe button is. Uses the page colour above.")
+        ec = s.get("end_card") or {}
+        self.ec_var = tk.BooleanVar(value=bool(ec.get("enabled", True)))
+        ttk.Checkbutton(c, text="Add the like & subscribe ending to every video", variable=self.ec_var,
+                        style="Card.TCheckbutton").pack(anchor="w", pady=4)
+        r3 = ttk.Frame(c, style="Card.TFrame")
+        r3.pack(fill="x", pady=3)
+        ttk.Label(r3, text="What he says (blank = a new friendly line each video)", style="Card.TLabel", width=58).pack(side="left")
+        self.ectext_var = tk.StringVar(value=ec.get("text") or "")
+        ttk.Entry(r3, textvariable=self.ectext_var).pack(side="left", fill="x", expand=True)
 
         self._voice_card(inner, s)
 
@@ -656,6 +682,20 @@ class YouTubeView:
     AI_VOICES = ["en-US-AndrewNeural", "en-US-AriaNeural", "en-US-GuyNeural", "en-US-JennyNeural",
                  "en-US-ChristopherNeural", "en-US-EmmaNeural", "en-US-BrianNeural", "en-US-MichelleNeural",
                  "en-US-RogerNeural", "en-GB-RyanNeural", "en-GB-SoniaNeural", "en-AU-NatashaNeural"]
+
+    def _open_props(self):
+        from .props import user_props_dir
+        open_path(user_props_dir())
+
+    def _prop_gallery(self):
+        from agent.config import data_dir
+
+        def go():
+            from .props import contact_sheet
+            path = os.path.join(data_dir(), "props_gallery.png")
+            contact_sheet(paper=str(self.yt.s.get("drawn_bg") or "white"), cols=14, cell=150).save(path)
+            return path
+        self._bg(go, done=lambda p: open_path(p))
 
     def _voice_card(self, inner, s):
         v = s.get("voice_clone") or {}
@@ -703,11 +743,11 @@ class YouTubeView:
             import shutil
             shutil.copyfile(path, dest)
         except Exception as e:
-            messagebox.showerror("NeonClip", f"Couldn't read that file: {e}")
+            messagebox.showerror("NeonClip V2", f"Couldn't read that file: {e}")
             return
         self.yt.s.set("voice_clone.sample", dest)
         self.voice_status.config(text=self._voice_status_text())
-        messagebox.showinfo("NeonClip", "Voice sample saved. Set “Voice” to “My cloned voice” and save to use it.")
+        messagebox.showinfo("NeonClip V2", "Voice sample saved. Set “Voice” to “My cloned voice” and save to use it.")
 
     def _setup_cloning(self):
         from . import voice_engine
@@ -724,7 +764,7 @@ class YouTubeView:
             ok, msg = voice_engine.ensure(self.yt.s, self.yt.log, progress=prog)
             def done():
                 self.voice_status.config(text=self._voice_status_text())
-                (messagebox.showinfo if ok else messagebox.showwarning)("NeonClip", msg)
+                (messagebox.showinfo if ok else messagebox.showwarning)("NeonClip V2", msg)
             self.root.after(0, done)
         threading.Thread(target=go, daemon=True).start()
 
@@ -762,7 +802,7 @@ class YouTubeView:
             url, _, rights = line.partition("|")
             rights = (rights.strip().lower() or "own").replace(" ", "_")
             if rights not in ("own", "permission", "creative_commons"):
-                messagebox.showwarning("NeonClip", f"\"{rights}\" isn't a valid right. Use own, permission or creative_commons.")
+                messagebox.showwarning("NeonClip V2", f"\"{rights}\" isn't a valid right. Use own, permission or creative_commons.")
                 return
             srcs.append({"url": url.strip(), "rights": rights, "note": ""})
         s.set("sources", srcs)
@@ -774,16 +814,20 @@ class YouTubeView:
         s.set("pace", self.pace_var.get() or "auto")
         s.set("stickman_backgrounds", self.bg_var.get() or "stock")
         s.set("drawn_bg", self.drawnbg_var.get() or "white")
+        s.set("props", self.props_var.get() or "some")
+        s.set("props_ai", bool(self.propsai_var.get()))
+        s.set("end_card.enabled", bool(self.ec_var.get()))
+        s.set("end_card.text", self.ectext_var.get().strip(), raw=True)
         s.set("voice", (self.aivoice_var.get() or "en-US-AndrewNeural").strip())
         s.set("voice_clone.mode", "cloned" if self.vmode_var.get() == "My cloned voice" else "ai")
         s.set("voice_clone.use_in", self.vusein_var.get() or "shorts")
         if self.vmode_var.get() == "My cloned voice":
             from . import voice_engine
             if not voice_engine.sample_path(s):
-                messagebox.showwarning("NeonClip", "Cloned voice is selected but there's no voice sample yet — import one, "
+                messagebox.showwarning("NeonClip V2", "Cloned voice is selected but there's no voice sample yet — import one, "
                                                    "or it'll use the AI voice until you do.")
         self.yt.wake.set()
-        messagebox.showinfo("NeonClip", "Saved.")
+        messagebox.showinfo("NeonClip V2", "Saved.")
 
     # ------------------------------------------------------------ settings
     SETTINGS = [
@@ -875,7 +919,7 @@ class YouTubeView:
         if self.yt.s["paused"] and ai.has_key(self.yt.s["ai"]):
             self.yt.state.pop("ai_warned", None)
         self.yt.wake.set()
-        messagebox.showinfo("NeonClip", "Saved.")
+        messagebox.showinfo("NeonClip V2", "Saved.")
 
     # ------------------------------------------------------------- refresh
     def _toggle(self):

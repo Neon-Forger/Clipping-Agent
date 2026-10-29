@@ -1,3 +1,5 @@
 Poppins is licensed under the SIL Open Font License 1.1 (https://openfontlicense.org). Copyright 2020 The Poppins Project Authors.
 
 Orbitron (Copyright The Orbitron Project Authors) and Share Tech Mono (Copyright Carrois Type Design) are licensed under the SIL Open Font License 1.1.
+
+Permanent Marker (Copyright (c) 2010 Font Diner, Inc.) is licensed under the Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0).

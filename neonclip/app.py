@@ -14,7 +14,7 @@ class Shell:
     def __init__(self, clip_agent, yt_agent):
         self.agent, self.yt = clip_agent, yt_agent
         self.root = tk.Tk()
-        self.root.title("NeonClip")
+        self.root.title("NeonClip V2")
         self.root.geometry("1280x820")
         self.root.minsize(1100, 700)
         self.root.configure(bg=theme.BG)
@@ -39,6 +39,9 @@ class Shell:
             logo.create_text(105 + dx, 70 + dy, text="CLIP", fill=theme.PINK, font=(theme.DISPLAY, 24))
         logo.create_text(105, 38, text="NEON", fill="#ffffff", font=(theme.DISPLAY, 24))
         logo.create_text(105, 70, text="CLIP", fill="#ffffff", font=(theme.DISPLAY, 24))
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):                       # V2 badge
+            logo.create_text(176 + dx, 70 + dy, text="V2", fill=theme.GOLD, font=(theme.DISPLAY, 13))
+        logo.create_text(176, 70, text="V2", fill="#ffffff", font=(theme.DISPLAY, 13))
         tk.Frame(side, bg=theme.LINE, height=2).pack(fill="x", padx=18, pady=10)
 
         self.main = ttk.Frame(self.root)
@@ -82,8 +85,8 @@ class Shell:
         n = self.agent.settings["ntfy"]
         c = ttk.Frame(f, style="Card.TFrame", padding=18)
         c.pack(fill="x", padx=20, pady=14)
-        ttk.Label(c, text="CONNECT THE NEONCLIP PHONE APP", style="Big.TLabel").pack(anchor="w")
-        ttk.Label(c, text="Install the NeonClip app on your phone, then type these into its Connect screen. "
+        ttk.Label(c, text="CONNECT THE NEONCLIP V2 PHONE APP", style="Big.TLabel").pack(anchor="w")
+        ttk.Label(c, text="Install the NeonClip V2 app on your phone, then type these into its Connect screen. "
                           "The phone app shows both sections (Clipping and YouTube) and can control them.",
                   style="CardMuted.TLabel", wraplength=900).pack(anchor="w", pady=(4, 12))
         for label, value in (("Server", n["server"]), ("Topic", n["topic"]), ("Pairing code", n.get("pair_code", ""))):
@@ -99,7 +102,7 @@ class Shell:
         b = ttk.Frame(c, style="Card.TFrame")
         b.pack(anchor="w", pady=12)
         ttk.Button(b, text="Send test notification", style="Accent.TButton",
-                   command=lambda: self.agent.ntfy.send("If you can read this, your phone is connected ✅", title="NeonClip test", tags=["tada"])).pack(side="left")
+                   command=lambda: self.agent.ntfy.send("If you can read this, your phone is connected ✅", title="NeonClip V2 test", tags=["tada"])).pack(side="left")
         ttk.Button(b, text="Get the phone app", command=lambda: webbrowser.open(APP_PAGE)).pack(side="left", padx=8)
         ttk.Button(b, text="Download latest PC version", command=lambda: webbrowser.open(
             "https://github.com/Neon-Forger/Clipping-Agent/releases/latest")).pack(side="left")
@@ -108,7 +111,7 @@ class Shell:
         return f
 
     def _close(self):
-        if messagebox.askyesno("Quit NeonClip?", "Quit NeonClip? Clipping and YouTube automation stop until you open it again.\n\n"
+        if messagebox.askyesno("Quit NeonClip V2?", "Quit NeonClip V2? Clipping and YouTube automation stop until you open it again.\n\n"
                                                  "Choose No to minimize it instead."):
             self.agent.stop()
             self.yt.stop()

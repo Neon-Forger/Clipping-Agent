@@ -220,11 +220,32 @@ def build_original(s, segments, portrait, work, out_path, log=None):
         t0 += media_duration(seg_mp4) or dur
     with open(os.path.join(work, "segments.json"), "w", encoding="utf-8") as f:
         json.dump(chapters, f)
+    narr_words = list(all_words)
+    ec = _endcard(s, portrait, work, log)
+    if ec:
+        parts.append(ec["path"])
+        all_words += [{"s": w["s"] + t0, "e": w["e"] + t0, "w": w["w"]} for w in ec.get("words") or []]
     _finish(s, parts, all_words, portrait, work, out_path)
     credits = list(dict.fromkeys(credits + ctx.photos.credits))
     with open(os.path.join(work, "edit.json"), "w", encoding="utf-8") as f:
-        json.dump({"style": "stock", "portrait": portrait, "segs": segs, "words": all_words, "credits": credits}, f)
+        json.dump({"style": "stock", "portrait": portrait, "segs": segs, "words": narr_words, "credits": credits,
+                   "endcard": ec}, f)
     return out_path, credits
+
+
+def _endcard(s, portrait, work, log=None, existing=None):
+    """The like & subscribe ending (made once per video; a re-edit reuses it)."""
+    from . import endcard
+    if not endcard.enabled(s):
+        return None
+    if existing and os.path.exists(existing.get("path") or ""):
+        return existing
+    try:
+        return endcard.build(s, portrait, work, log)
+    except Exception as e:
+        if log:
+            log("warn", f"Couldn't add the like & subscribe ending ({e}).")
+        return None
 
 
 REEDIT_STOCK_PROMPT = """You are re-editing the FOOTAGE of a finished video. The voiceover stays exactly the same.
@@ -280,7 +301,14 @@ def reedit_stock(s, work, out_path, instructions, log=None):
         segs[i].update(visual=q, info=info)
         _pair(work, i, segs[i]["dur"])
     parts = [os.path.join(work, f"s{i:02d}.mp4") for i in range(len(segs))]
-    _finish(s, parts, ed["words"], ed["portrait"], work, out_path)
+    words = list(ed["words"])
+    ec = _endcard(s, ed["portrait"], work, log, ed.get("endcard"))
+    if ec:
+        off = sum(media_duration(p) for p in parts)
+        parts.append(ec["path"])
+        words += [{"s": w["s"] + off, "e": w["e"] + off, "w": w["w"]} for w in ec.get("words") or []]
+    ed["endcard"] = ec
+    _finish(s, parts, words, ed["portrait"], work, out_path)
     credits = list(dict.fromkeys(c for sg in segs for c in (sg.get("info") or {}).get("credits", [])))
     ed.update(segs=segs, credits=credits)
     with open(os.path.join(work, "edit.json"), "w", encoding="utf-8") as f:

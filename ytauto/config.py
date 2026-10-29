@@ -58,6 +58,12 @@ DEFAULTS = {
     "pace": "auto",                 # auto | fast | calm | cinematic — how long each shot is held (slower = calmer, longer videos)
     "stickman_backgrounds": "stock",# stock = footage/photos | drawn = hand-drawn doodle scenes in the cartoon style | mix
     "drawn_bg": "white",            # white | black — paper colour for drawn scenes and solid beats
+    "props": "some",                # off | some | lots — doodles of the things being talked about, the character points at them
+    "props_ai": True,               # if no doodle fits, ask the AI image model for one (uses your Gemini key; falls back silently)
+    "end_card": {                   # like & subscribe ending on every original video
+        "enabled": True,
+        "text": "",                 # what he says (blank = a friendly line that changes each video)
+    },
     "captions": True,
     "caption_style": "neon",        # neon | clean
     # ---- training mode ----

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>NeonClip</title>
+<title>NeonClip V2</title>
 <style>
   @font-face { font-family: Orbitron; src: url("fonts/Orbitron-ExtraBold.ttf"); }
   @font-face { font-family: STM; src: url("fonts/ShareTechMono-Regular.ttf"); }
@@ -22,6 +22,7 @@
   header { position:sticky; top:0; z-index:5; background:rgba(4,9,21,.92); backdrop-filter:blur(6px); padding:14px 16px 10px; display:flex; align-items:center; gap:10px; border-bottom:1px solid var(--line); }
   .logo { font-family:Orbitron, sans-serif; letter-spacing:3px; font-size:20px; color:#fff; text-shadow:0 0 12px var(--blue); }
   .logo b { color:#fff; text-shadow:0 0 12px var(--pink), 0 0 2px var(--pink); }
+  .logo .v2 { font-size:11px; margin-left:4px; color:#fff; text-shadow:0 0 8px #FFD34D, 0 0 2px #FFD34D; }
   .dot { width:10px; height:10px; border-radius:50%; background:var(--muted); margin-left:auto; }
   .dot.on { background:var(--green); box-shadow:0 0 10px var(--green); }
   .dot.paused { background:var(--gold); box-shadow:0 0 10px var(--gold); }
@@ -63,7 +64,7 @@
 <body>
 <div class="sky"></div><div class="grid"></div>
 <header>
-  <div class="logo">NEON<b>CLIP</b></div>
+  <div class="logo">NEON<b>CLIP</b><sup class="v2">V2</sup></div>
   <div class="dot" id="dot"></div>
 </header>
 <div class="seg" id="seg">
@@ -76,7 +77,7 @@
   <section id="connect" class="hide">
     <div class="card">
       <div class="task">CONNECT TO YOUR PC</div>
-      <p class="muted">On the PC open NeonClip → PHONE. Type in the topic and pairing code shown there.</p>
+      <p class="muted">On the PC open NeonClip V2 → PHONE. Type in the topic and pairing code shown there.</p>
       <label>ntfy server</label><input id="cServer" value="https://ntfy.sh">
       <label>Topic</label><input id="cTopic" placeholder="clipcartel-xxxxxxxxxxxx" autocapitalize="off" autocorrect="off">
       <label>Pairing code (needed to sign in from the phone)</label><input id="cPair" placeholder="ABCD-1234" autocapitalize="characters" autocorrect="off">
@@ -209,6 +210,10 @@
       <div class="row"><button onclick="cmd('yt set pace fast')">Fast</button><button onclick="cmd('yt set pace calm')">Calm</button><button onclick="cmd('yt set pace cinematic')">Slow</button></div>
       <label>Stickman backgrounds</label>
       <div class="row"><button onclick="cmd('yt set stickman_backgrounds stock')">Stock</button><button onclick="cmd('yt set stickman_backgrounds drawn')">Drawn scenes</button><button onclick="cmd('yt set drawn_bg white')">White</button><button onclick="cmd('yt set drawn_bg black')">Black</button></div>
+      <label>Props (he points at a drawing of what he's talking about)</label>
+      <div class="row"><button onclick="cmd('yt set props off')">Off</button><button onclick="cmd('yt set props some')">Some</button><button onclick="cmd('yt set props lots')">Lots</button></div>
+      <label>Like &amp; subscribe ending</label>
+      <div class="row"><button onclick="cmd('yt set end_card.enabled true')">On</button><button onclick="cmd('yt set end_card.enabled false')">Off</button></div>
       <label>Visual direction (how videos LOOK: art style, backgrounds, camera, graphics)</label><textarea id="y_visual" style="min-height:140px"></textarea><br><br>
       <div class="row"><button onclick="cmd('yt visual '+$('y_visual').value)">Save</button><button onclick="cmd('yt visual clear')">Clear</button></div>
     </div>
@@ -457,7 +462,7 @@ function start() {
 }
 window.onAppResume = () => { if (cfg.topic) { loadHistory(); cmd("state", true); } };
 setInterval(tickOnline, 30000);
-if (hasAndroid) for (const el of $$(".ver")) el.textContent = "NeonClip " + Android.version();
+if (hasAndroid) for (const el of $$(".ver")) el.textContent = "NeonClip V2 " + Android.version();
 section(sec);
 if (cfg.topic) { start(); setTimeout(() => cmd("state", true), 800); } else show("connect");
 </script>

@@ -1,4 +1,4 @@
-# NeonClip
+# NeonClip V2
 
 A Windows app with **two completely separate sections** and an Android phone app that watches and controls both.
 Each section has its own settings, database, AI keys and browser sign-ins.

@@ -120,7 +120,7 @@ class Agent:
                          name="ntfy").start()
         threading.Thread(target=self._heartbeat, daemon=True, name="heartbeat").start()
         threading.Thread(target=self._check_update, daemon=True, name="update").start()
-        self.log("info", "NeonClip started", notify=True, title="🤖 NeonClip online", tags=["robot"])
+        self.log("info", "NeonClip V2 started", notify=True, title="🤖 NeonClip V2 online", tags=["robot"])
         self.push_state()
 
     def stop(self):
