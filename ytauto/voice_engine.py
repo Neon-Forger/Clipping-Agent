@@ -74,23 +74,99 @@ def _base_python():
     return out
 
 
-def _run(cmd, log=None, timeout=3600):
+def _run(cmd, log=None, timeout=3600, env=None):
     kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, **kw)
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, **kw)
     if p.returncode != 0 and log:
         log("warn", f"voice setup: {(p.stderr or p.stdout or '').strip()[-300:]}")
     return p.returncode == 0, (p.stderr or p.stdout or "")
 
 
+# ---- uv: a tiny self-contained tool that downloads its own Python, so the user needs nothing pre-installed ----
+def _uv_exe():
+    return os.path.join(_dir(), "uv.exe" if os.name == "nt" else "uv")
+
+
+def _uv_asset():
+    import platform
+    m = platform.machine().lower()
+    arm = ("arm" in m or "aarch64" in m)
+    if os.name == "nt":
+        return ("uv-aarch64-pc-windows-msvc.zip" if arm else "uv-x86_64-pc-windows-msvc.zip", "zip")
+    if sys.platform == "darwin":
+        return (f"uv-{'aarch64' if arm else 'x86_64'}-apple-darwin.tar.gz", "tar")
+    return (f"uv-{'aarch64' if arm else 'x86_64'}-unknown-linux-gnu.tar.gz", "tar")
+
+
+def _get_uv(log=None, progress=None):
+    """Download the uv binary into the voice folder (once). Returns its path, or None."""
+    if os.path.exists(_uv_exe()):
+        return _uv_exe()
+    asset, kind = _uv_asset()
+    url = f"https://github.com/astral-sh/uv/releases/latest/download/{asset}"
+    if progress:
+        progress("Getting the Python setup tool…")
+    import io
+    import requests
+    r = requests.get(url, timeout=300)
+    r.raise_for_status()
+    data = io.BytesIO(r.content)
+    if kind == "zip":
+        import zipfile
+        with zipfile.ZipFile(data) as z:
+            name = next((n for n in z.namelist() if n.endswith("uv.exe")), None)
+            if name:
+                with z.open(name) as src, open(_uv_exe(), "wb") as dst:
+                    dst.write(src.read())
+    else:
+        import tarfile
+        with tarfile.open(fileobj=data, mode="r:gz") as tf:
+            mbr = next((m for m in tf.getmembers() if m.name.endswith("/uv") or m.name == "uv"), None)
+            if mbr:
+                with open(_uv_exe(), "wb") as dst:
+                    dst.write(tf.extractfile(mbr).read())
+        try:
+            os.chmod(_uv_exe(), 0o755)
+        except OSError:
+            pass
+    return _uv_exe() if os.path.exists(_uv_exe()) else None
+
+
 def ensure(s=None, log=None, progress=None):
-    """Build the engine environment and install Coqui XTTS. One-time, slow. Returns (ok, message)."""
+    """Build the engine environment and install Coqui XTTS. One-time, slow. Returns (ok, message).
+    Prefers uv (downloads its own Python 3.11, so nothing needs to be pre-installed); falls back to a system Python."""
     if ready():
         return True, "Voice cloning is already set up."
+    env = _env_dir()
+
+    # Preferred path: uv fetches a private Python and installs everything, no system Python needed.
+    try:
+        uv = _get_uv(log, progress)
+    except Exception as e:
+        uv = None
+        if log:
+            log("warn", f"voice setup: couldn't fetch uv ({e})")
+    if uv:
+        if progress:
+            progress("Setting up a private Python for the voice engine…")
+        shutil.rmtree(env, ignore_errors=True)
+        ok, _ = _run([uv, "venv", env, "--python", "3.11", "--seed"], log, timeout=1800)
+        if ok and os.path.exists(_venv_python()):
+            if progress:
+                progress("Downloading the voice engine (~2 GB, one time)… this can take several minutes.")
+            ok, _ = _run([uv, "pip", "install", "--python", _venv_python(), "coqui-tts", "soundfile"], log, timeout=7200)
+            if ok:
+                with open(_marker(), "w", encoding="utf-8") as f:
+                    f.write("ok")
+                return True, "Voice cloning is ready."
+            return False, "The voice engine download failed partway. Check the PC's internet connection and try again."
+
+    # Fallback: use a Python already installed on the PC.
     pys = _base_python()
     if not pys:
-        return False, ("Voice cloning needs Python on this PC to set itself up. Install Python 3.11 from python.org "
-                       "(tick “Add to PATH”), then try again.")
-    env = _env_dir()
+        return False, ("Couldn't set up voice cloning automatically (the download of the setup tool failed). "
+                       "Check the PC's internet connection and try again; if it keeps failing, install Python 3.11 "
+                       "from python.org (tick “Add to PATH”).")
     if progress:
         progress("Creating the voice engine environment…")
     ok = False
@@ -101,14 +177,14 @@ def ensure(s=None, log=None, progress=None):
         if ok and os.path.exists(_venv_python()):
             break
     if not ok or not os.path.exists(_venv_python()):
-        return False, "Couldn't create the voice engine environment. Is Python installed and on PATH?"
+        return False, "Couldn't create the voice engine environment. Check the PC's internet connection and try again."
     vpy = _venv_python()
     if progress:
         progress("Upgrading pip…")
     _run([vpy, "-m", "pip", "install", "--upgrade", "pip", "wheel"], log, timeout=600)
     if progress:
         progress("Downloading the voice engine (~2 GB, one time)… this can take several minutes.")
-    ok, out = _run([vpy, "-m", "pip", "install", "coqui-tts", "soundfile"], log, timeout=5400)
+    ok, _ = _run([vpy, "-m", "pip", "install", "coqui-tts", "soundfile"], log, timeout=5400)
     if not ok:
         return False, "The voice engine download failed. Check the PC's internet connection and try again."
     with open(_marker(), "w", encoding="utf-8") as f:
